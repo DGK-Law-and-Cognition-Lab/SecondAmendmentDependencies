@@ -21,11 +21,11 @@ This repository contains materials for project regarding Second Amendment lay in
 │   └── Pre-pilot
 ├── Data
 ├── Docs
-├── Figures 
+│   └── Memorandum
+├── Figures
+
 ```
 
 ### Code
 
 ------------------------------------------------------------------------
-
-### R-Code
