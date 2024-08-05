@@ -21,7 +21,8 @@ This repository contains materials for project regarding Second Amendment lay in
 │   └── Pre-pilot
 ├── Data
 ├── Docs
-│   └── Memorandum
+│   ├── Memorandum
+│   └── Stimuli
 ├── Figures
 
 ```
