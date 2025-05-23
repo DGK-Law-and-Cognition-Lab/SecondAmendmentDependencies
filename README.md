@@ -18,7 +18,7 @@ This repository contains materials for project regarding Second Amendment lay in
 .
 ├── README.md
 ├── Code
-│   └── Pre-pilot
+│   └── Pilot
 ├── Data
 ├── Docs
 │   ├── Memorandum
