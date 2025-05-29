@@ -56,11 +56,11 @@ The linguistic structure of the Second Amendment has posed persistent interpreti
 * **Code:**
 
   * [Pilot Analysis RMarkdown](./Code/R/Pilot/PilotAnalysis_V3.Rmd)
-  * [Pilot Analysis HTML Output](.https://dgk-law-and-cognition-lab.github.io/SecondAmendmentDependencies/Code/R/Pilot/PilotAnalysis_V3.html)
+  * [Pilot Analysis HTML Output](https://dgk-law-and-cognition-lab.github.io/SecondAmendmentDependencies/Code/R/Pilot/PilotAnalysis_V3.html)
 
 * **Experiment Materials:**
 
-  * [Qualtrics Survey (PDF)](.https://dgk-law-and-cognition-lab.github.io/SecondAmendmentDependencies/Experiment/Qualtrics.pdf)
+  * [Qualtrics Survey (PDF)](https://dgk-law-and-cognition-lab.github.io/SecondAmendmentDependencies/Experiment/Qualtrics.pdf)
 
 ---
 
