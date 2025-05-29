@@ -28,7 +28,6 @@ The linguistic structure of the Second Amendment has posed persistent interpreti
 
 ```
 .
-├── README.md / index.md
 ├── Code/
 │   └── R/
 │       └── Pilot/
@@ -57,11 +56,11 @@ The linguistic structure of the Second Amendment has posed persistent interpreti
 * **Code:**
 
   * [Pilot Analysis RMarkdown](./Code/R/Pilot/PilotAnalysis_V3.Rmd)
-  * [Pilot Analysis HTML Output](./Code/R/Pilot/PilotAnalysis_V3.html)
+  * [Pilot Analysis HTML Output](.https://dgk-law-and-cognition-lab.github.io/SecondAmendmentDependencies/Code/R/Pilot/PilotAnalysis_V3.html)
 
 * **Experiment Materials:**
 
-  * [Qualtrics Survey (PDF)](./Experiment/Qualtrics.pdf)
+  * [Qualtrics Survey (PDF)](.https://dgk-law-and-cognition-lab.github.io/SecondAmendmentDependencies/Experiment/Qualtrics.pdf)
 
 ---
 
@@ -81,7 +80,7 @@ The linguistic structure of the Second Amendment has posed persistent interpreti
 
 3. **Viewing Results:**
 
-   * See summary outputs in [PilotAnalysis\_V3.html](./Code/R/Pilot/PilotAnalysis_V3.html).
+   * See summary outputs in [PilotAnalysis\_V3.html](.https://dgk-law-and-cognition-lab.github.io/SecondAmendmentDependencies/Code/R/Pilot/PilotAnalysis_V3.html).
 
 ---
 
