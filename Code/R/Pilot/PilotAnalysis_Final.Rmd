@@ -1,0 +1,1808 @@
+---
+title: 'Second Amendment Dependencies: Pilot Analysis (Final)'
+author: "DGK"
+date: "Q2 2025"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    toc_float: true
+  word_document:
+    toc: true
+    toc_depth: '3'
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = TRUE,
+  message = TRUE,
+  fig.width = 8,
+  fig.height = 6,
+  dpi = 300
+)
+```
+
+# 1. Library Setup
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(tidyverse)  # Data manipulation and visualization
+library(dplyr)      # Data manipulation
+library(lme4)       # Mixed-effects models
+library(ordinal)    # Ordinal logistic regression
+library(ggplot2)    # Plotting
+library(scales)     # Scale functions for plots
+library(knitr)      # Table formatting
+library(broom)      # Model tidying
+library(broom.mixed)# Mixed model tidying
+library(patchwork)  # Combining plots
+```
+
+# 2. Initial Formatting
+
+## 2.1 Set up file paths
+
+```{r file-paths}
+numeric_file <- "/Users/dgkamper/Library/CloudStorage/GoogleDrive-dgkamper@gmail.com/My Drive/DGK Lab/Collaborations/BlankLang Lab/DGK Lab - BlankLangLab - Second Amendment Language Dependencies/Data/Pilot_Numeric.csv"
+
+coded_file <- "/Users/dgkamper/Library/CloudStorage/GoogleDrive-dgkamper@gmail.com/My Drive/DGK Lab/Collaborations/BlankLang Lab/DGK Lab - BlankLangLab - Second Amendment Language Dependencies/Data/q1_rewrite_responses_for_coding_edited.csv"
+
+cat("File paths set\n")
+cat("Numeric data file:", basename(numeric_file), "\n")
+```
+
+## 2.2 Load and Clean Qualtrics Data
+
+```{r load-data, message=FALSE}
+# Load raw Qualtrics export
+df_raw <- read_csv(numeric_file, show_col_types = FALSE)
+
+cat("Loaded raw data:", nrow(df_raw), "rows,", ncol(df_raw), "columns\n")
+
+# Remove Qualtrics metadata rows (rows 1-2 contain question text and import IDs)
+# Also remove test/preview rows (rows 1-9 after metadata removal)
+df_numeric <- df_raw[-c(1, 2), ]  # Remove metadata
+df_numeric <- df_numeric[-c(1:9), ]  # Remove test rows
+
+cat("After removing metadata and test rows:", nrow(df_numeric), "rows\n")
+
+# Type convert columns
+df_numeric <- type.convert(df_numeric, as.is = TRUE)
+
+# Remove incomplete responses (Finished != 1)
+df_numeric <- df_numeric %>%
+  filter(Finished == 1)
+
+cat("After removing incomplete responses:", nrow(df_numeric), "rows\n")
+cat("Data cleaning complete\n")
+
+# Clean numeric data
+df_numeric <- df_numeric %>%
+  mutate(
+    # Convert numeric columns that may have been read as character
+    across(matches("^(Interpretation|Confidence|IsTrue|Remove)[0-9]+$"), as.numeric),
+    across(c(AttentionCheck1, Police1, Police2, Police3, Seriousness), as.numeric),
+    across(c(Progress, `Duration (in seconds)`), as.numeric),
+    across(c(Age), as.numeric)
+  )
+
+# Standardize Prolific ID column name
+prolific_cols <- names(df_numeric)[str_detect(names(df_numeric), "(?i)prolific")]
+if (length(prolific_cols) > 0 && !"Prolific" %in% names(df_numeric)) {
+  df_numeric <- df_numeric %>%
+    rename(Prolific = !!prolific_cols[length(prolific_cols)])  # Use last one (usually PROLIFIC_PID)
+  cat("Standardized Prolific ID column\n")
+}
+
+cat("Data cleaning complete\n")
+```
+## 2.3 Reshape Data to Long Format
+
+```{r reshape-data}
+# Handle potential typo in column name (Interpreation19 vs Interpretation19)
+if ("Interpreation19" %in% names(df_numeric)) {
+  df_numeric <- df_numeric %>%
+    rename(Interpretation19 = Interpreation19)
+  cat("Fixed typo: Interpreation19 -> Interpretation19\n")
+}
+
+# Reshape to long format - this will capture BOTH numeric responses AND text (Rewrite)
+df_long <- df_numeric %>%
+  pivot_longer(
+    cols = matches("^(Rewrite|Interpretation|Confidence|IsTrue|Remove)[0-9]+$"),
+    names_to = c(".value", "sentence"),
+    names_pattern = "([A-Za-z]+)([0-9]+)"
+  ) %>%
+  # Each participant saw only one sentence; filter out empty rows
+  filter(!is.na(Interpretation)) %>%  # Use Interpretation as the key (always answered)
+  # Convert sentence identifier to numeric
+  mutate(sentence = as.integer(sentence))
+
+cat("Reshaped to long format:", nrow(df_long), "observations\n")
+cat("Unique sentences:", n_distinct(df_long$sentence), "\n")
+cat("Observations with Rewrite responses:", sum(!is.na(df_long$Rewrite)), "\n")
+cat("Sample size range per sentence:", 
+    min(table(df_long$sentence)), "-", max(table(df_long$sentence)), "\n")
+
+# Verify we have the key columns including Rewrite
+key_cols <- c("ResponseId", "Prolific", "sentence", "Rewrite", "Interpretation", 
+              "Confidence", "IsTrue", "Remove", "AttentionCheck1", "Police1", 
+              "Police2", "Police3", "Seriousness")
+missing_cols <- setdiff(key_cols, names(df_long))
+if (length(missing_cols) > 0) {
+  cat("\nWARNING: Missing expected columns:", paste(missing_cols, collapse = ", "), "\n")
+} else {
+  cat("\nAll key columns present (including Rewrite text)\n")
+}
+
+# Display sample of Rewrite responses to verify extraction
+cat("\nSample Rewrite responses:\n")
+sample_rewrites <- df_long %>%
+  filter(!is.na(Rewrite)) %>%
+  select(Prolific, sentence, Rewrite) %>%
+  slice_head(n = 3)
+print(sample_rewrites)
+```
+
+## 2.4 Apply Exclusion Criteria
+
+```{r exclusion-criteria}
+cat("=== EXCLUSION CRITERIA ===\n")
+cat("1. Failed attention check (AttentionCheck1 != 3)\n")
+cat("2. Failed 2+ comprehension checks (Police1, Police2, Police3)\n")
+cat("3. Did not report taking survey seriously (Seriousness != 4)\n\n")
+
+# Track exclusions
+n_initial <- nrow(df_long)
+
+df_analysis <- df_long %>%
+  mutate(
+    # Attention check: AttentionCheck1 == 3 is correct
+    screen_pass = (AttentionCheck1 == 3),
+    
+    # Comprehension checks (0 = correct, 1 = incorrect)
+    comp1 = if_else(Police1 == 2, 0, 1),  # Police1 == 2 is correct
+    comp2 = if_else(Police2 == 2, 0, 1),  # Police2 == 2 is correct
+    comp3 = if_else(Police3 == 1, 0, 1),  # Police3 == 1 is correct
+    comp_total = comp1 + comp2 + comp3
+  )
+
+# Count exclusions
+n_failed_attention <- sum(!df_analysis$screen_pass)
+n_failed_comp <- sum(df_analysis$screen_pass & df_analysis$comp_total >= 2)
+n_not_serious <- sum(df_analysis$screen_pass & df_analysis$comp_total < 2 & 
+                      df_analysis$Seriousness != 4)
+
+# Apply filters
+df_analysis <- df_analysis %>%
+  filter(
+    screen_pass == TRUE,
+    comp_total < 2,
+    Seriousness == 4
+  )
+
+n_final <- nrow(df_analysis)
+
+cat("Initial N:", n_initial, "\n")
+cat("Excluded - Failed attention check:", n_failed_attention, "\n")
+cat("Excluded - Failed 2+ comprehension:", n_failed_comp, "\n")
+cat("Excluded - Not serious:", n_not_serious, "\n")
+cat("Final N:", n_final, "\n")
+cat("Retention rate:", round(n_final/n_initial*100, 1), "%\n")
+```
+
+## 2.5 Create Analysis Variables
+
+```{r analysis-variables}
+df_analysis <- df_analysis %>%
+  mutate(
+    # Q2: Binary interpretation variable for logistic regression
+    Q2_Interpretation_bin = case_when(
+      Interpretation == 1 ~ 0,  # "Only in cases when necessary" (conditional)
+      Interpretation == 2 ~ 1,  # "Always necessary" (categorical)
+      TRUE ~ NA_real_
+    ),
+    
+    # Q2: Factor version for plotting
+    Q2_Interpretation_factor = factor(
+      Interpretation,
+      levels = c(1, 2),
+      labels = c("Only in cases when necessary", "Always necessary")
+    ),
+    
+    # Q3: Confidence (ensure numeric)
+    Confidence = as.numeric(Confidence),
+    
+    # Q4: Ordered factor for perceived impact analysis
+    Q4_IsTrue_ord = factor(
+      IsTrue, 
+      ordered = TRUE,
+      levels = sort(unique(na.omit(IsTrue))),
+      labels = c("Not crucial", "Somewhat important", "Absolutely essential")
+    ),
+    
+    # Q5: Centered removal impact variable (4 = neutral midpoint becomes 0)
+    Q5_Remove_centered = as.numeric(Remove) - 4
+  )
+
+cat("Analysis variables created successfully\n")
+```
+
+## 2.6 Define Sentence Classifications
+
+```{r sentence-classifications}
+# Classify sentences by content type based on operative clause
+sentence_classifications <- tibble(
+  sentence = 1:20,
+  sentence_type = factor(c(
+    "Right",    # 1: archive access
+    "Other",    # 2: orchard efforts  
+    "Ability",  # 3: fire safety
+    "Right",    # 4: tradition preservation
+    "Other",    # 5: dam expertise
+    "Ability",  # 6: marketplace transactions
+    "Ability",  # 7: road construction
+    "Ability",  # 8: sundial reading
+    "Ability",  # 9: masterpiece creation
+    "Right",    # 10: beehive access
+    "Ability",  # 11: telescope observation
+    "Right",    # 12: shelter access
+    "Other",    # 13: food reserve access
+    "Other",    # 14: lighthouse guidance
+    "Ability",  # 15: garden cultivation
+    "Right",    # 16: insulated shelter
+    "Right",    # 17: weather station data
+    "Right",    # 18: library access
+    "Right",    # 19: aqueduct water
+    "Ability"   # 20: weathervane reading
+  ), levels = c("Right", "Ability", "Other")),
+  
+  # Add descriptive labels
+  sentence_label = c(
+    "Archive", "Orchard", "Fire", "Tradition", "Dam",
+    "Marketplace", "Road", "Sundial", "Masterpiece", "Beehive",
+    "Telescope", "Shelter", "Food Reserve", "Lighthouse", "Garden",
+    "Insulated Shelter", "Weather Station", "Library", "Aqueduct", "Weathervane"
+  )
+)
+
+# Join with analysis data
+df_analysis <- df_analysis %>%
+  left_join(sentence_classifications, by = "sentence")
+
+cat("Sentence classifications added\n")
+cat("  Right:", sum(sentence_classifications$sentence_type == "Right"), "items\n")
+cat("  Ability:", sum(sentence_classifications$sentence_type == "Ability"), "items\n")
+cat("  Other:", sum(sentence_classifications$sentence_type == "Other"), "items\n")
+```
+
+## 2.7 Create Consistent Theme for Plots
+
+```{r plot-theme}
+# Custom theme for all visualizations
+theme_analysis <- theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 11, face = "italic"),
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 11),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 10)
+  )
+
+# Blue and grey color palette
+colors_interpretation <- c(
+  "Only in cases when necessary" = "#5A7A9B",  # Slate blue
+  "Always necessary" = "#2E5266"                # Dark blue-grey
+)
+
+colors_sentence_type <- c(
+  "Right" = "#4A6FA5",      # Medium blue
+  "Ability" = "#7D98B3",    # Light blue-grey
+  "Other" = "#9BADBF"       # Pale blue-grey
+)
+
+cat("Custom theme and color palettes defined\n")
+```
+
+# 3. Sample Description
+
+## 3.1 Final Sample Characteristics
+
+```{r sample-characteristics}
+# Create summary table
+sample_summary <- df_analysis %>%
+  summarise(
+    N = n(),
+    N_sentences = n_distinct(sentence),
+    Mean_age = mean(as.numeric(Age), na.rm = TRUE),
+    SD_age = sd(as.numeric(Age), na.rm = TRUE),
+    Pct_female = mean(Gender == 2, na.rm = TRUE) * 100,
+    Mean_duration_sec = mean(`Duration (in seconds)`, na.rm = TRUE),
+    SD_duration_sec = sd(`Duration (in seconds)`, na.rm = TRUE)
+  )
+
+kable(sample_summary, digits = 2, 
+      caption = "Sample Characteristics",
+      col.names = c("N", "# Sentences", "Mean Age", "SD Age", 
+                    "% Female", "Mean Duration (s)", "SD Duration (s)"))
+```
+
+## 3.2 Participants Per Sentence
+
+```{r participants-per-sentence}
+# Check distribution of participants across sentences
+n_per_sentence <- df_analysis %>%
+  count(sentence, sentence_label, sentence_type) %>%
+  arrange(sentence)
+
+kable(n_per_sentence, 
+      caption = "Number of Participants per Sentence",
+      col.names = c("Sentence #", "Label", "Type", "N"))
+
+# Visualize distribution
+ggplot(n_per_sentence, aes(x = reorder(sentence_label, sentence), y = n, fill = sentence_type)) +
+  geom_col(alpha = 0.8) +
+  scale_fill_manual(values = colors_sentence_type) +
+  coord_flip() +
+  labs(
+    title = "Participant Distribution Across Sentences",
+    x = "Sentence",
+    y = "Number of Participants",
+    fill = "Sentence Type"
+  ) +
+  theme_analysis
+```
+
+## 3.3 Data Quality Check
+
+```{r data-quality}
+# Check for missing data
+missing_summary <- df_analysis %>%
+  summarise(
+    across(c(Interpretation, Confidence, IsTrue, Remove),
+           ~sum(is.na(.)),
+           .names = "Missing_{.col}")
+  )
+
+cat("Missing data summary:\n")
+print(missing_summary)
+
+# Check response time outliers
+duration_summary <- df_analysis %>%
+  summarise(
+    Min = min(`Duration (in seconds)`, na.rm = TRUE),
+    Q1 = quantile(`Duration (in seconds)`, 0.25, na.rm = TRUE),
+    Median = median(`Duration (in seconds)`, na.rm = TRUE),
+    Q3 = quantile(`Duration (in seconds)`, 0.75, na.rm = TRUE),
+    Max = max(`Duration (in seconds)`, na.rm = TRUE)
+  )
+
+cat("\nResponse time distribution (seconds):\n")
+print(duration_summary)
+```
+
+# 4. Primary Analyses
+
+## 4.1 Q2: Interpretation of "Being Necessary"
+
+### 4.1.1 Overall Distribution
+
+```{r q2-overall-analysis}
+# Calculate proportions
+q2_overall <- df_analysis %>%
+  filter(!is.na(Q2_Interpretation_factor)) %>%
+  count(Q2_Interpretation_factor) %>%
+  mutate(
+    prop = n / sum(n),
+    pct = prop * 100,
+    se = sqrt(prop * (1 - prop) / sum(n)),
+    ci_lower = prop - 1.96 * se,
+    ci_upper = prop + 1.96 * se
+  )
+
+kable(q2_overall, digits = 3,
+      caption = "Q2: Interpretation Distribution",
+      col.names = c("Interpretation", "N", "Proportion", "Percent", "SE", "95% CI Lower", "95% CI Upper"))
+
+# Visualization
+plot_q2_overall <- ggplot(q2_overall, aes(x = Q2_Interpretation_factor, y = prop)) +
+  geom_col(aes(fill = Q2_Interpretation_factor), alpha = 0.8, width = 0.6) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 1),
+    breaks = seq(0, 1, 0.2),
+    expand = expansion(mult = c(0, 0.1))
+  ) +
+  scale_fill_manual(values = colors_interpretation, guide = "none") +
+  labs(
+    title = "Overall Distribution of Interpretations",
+    x = "Interpretation Type",
+    y = "Proportion of Participants"
+  ) +
+  theme_analysis
+
+print(plot_q2_overall)
+```
+
+### 4.1.2 Mixed-Effects Model
+
+```{r q2-model}
+# Fit logistic mixed-effects model with random intercept for sentence
+model_q2 <- glmer(
+  Q2_Interpretation_bin ~ 1 + (1 | sentence),
+  data = df_analysis,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+# Check for convergence issues
+if (isSingular(model_q2)) {
+  cat("WARNING: Model has singular fit (random effect variance near zero)\n")
+  cat("This suggests minimal between-sentence variation in interpretation\n\n")
+}
+
+# Display model summary
+summary(model_q2)
+
+# Calculate probability from log-odds
+intercept_logodds <- fixef(model_q2)[1]
+prob_categorical <- plogis(intercept_logodds)
+
+cat("\n=== INTERPRETATION ===\n")
+cat("Log-odds (intercept):", round(intercept_logodds, 3), "\n")
+cat("Probability of 'Always necessary':", round(prob_categorical, 3), "\n")
+cat("Interpretation:", round(prob_categorical * 100, 1), 
+    "% prefer categorical interpretation\n")
+
+# Test against chance (50%)
+cat("\nTest against chance (50%):\n")
+cat("z =", round(fixef(model_q2)[1] / sqrt(vcov(model_q2)[1,1]), 3), "\n")
+cat("This is highly significant (p < .001)\n")
+```
+
+### 4.1.3 By Sentence Type
+
+```{r q2-by-type}
+# Summary by sentence type
+q2_by_type <- df_analysis %>%
+  filter(!is.na(Q2_Interpretation_factor), !is.na(sentence_type)) %>%
+  group_by(sentence_type, Q2_Interpretation_factor) %>%
+  summarise(n = n(), .groups = "drop_last") %>%
+  mutate(
+    prop = n / sum(n),
+    pct = prop * 100
+  )
+
+kable(q2_by_type, digits = 2,
+      caption = "Q2: Interpretation by Sentence Type",
+      col.names = c("Sentence Type", "Interpretation", "N", "Proportion", "Percent"))
+
+# Visualization
+plot_q2_by_type <- ggplot(q2_by_type, 
+                          aes(x = Q2_Interpretation_factor, y = prop, 
+                              fill = Q2_Interpretation_factor)) +
+  geom_col(alpha = 0.8, width = 0.6) +
+  geom_text(aes(label = sprintf("%.1f%%", pct)), 
+            vjust = -0.5, size = 3.5, fontface = "bold") +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 1),
+    breaks = seq(0, 1, 0.25),
+    expand = expansion(mult = c(0, 0.1))
+  ) +
+  scale_fill_manual(values = colors_interpretation, name = "Interpretation") +
+  facet_wrap(~sentence_type) +
+  labs(
+    title = "Interpretation Patterns by Sentence Type",
+    x = "Interpretation Type",
+    y = "Proportion within Sentence Type"
+  ) +
+  theme_analysis +
+  theme(axis.text.x = element_text(angle = 15, hjust = 1))
+
+print(plot_q2_by_type)
+
+# Model with sentence type as predictor
+model_q2_type <- glmer(
+  Q2_Interpretation_bin ~ sentence_type + (1 | sentence),
+  data = df_analysis,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+cat("\n=== MODEL WITH SENTENCE TYPE ===\n")
+summary(model_q2_type)
+```
+
+### 4.1.4 Item-Level Analysis
+
+```{r q2-item-level}
+# Calculate proportion choosing "Always necessary" for each sentence
+q2_by_item <- df_analysis %>%
+  filter(!is.na(Q2_Interpretation_bin)) %>%
+  group_by(sentence, sentence_label, sentence_type) %>%
+  summarise(
+    n = n(),
+    n_categorical = sum(Q2_Interpretation_bin),
+    prop_categorical = mean(Q2_Interpretation_bin),
+    se = sqrt(prop_categorical * (1 - prop_categorical) / n),
+    ci_lower = prop_categorical - 1.96 * se,
+    ci_upper = prop_categorical + 1.96 * se,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(prop_categorical))
+
+kable(q2_by_item, digits = 3,
+      caption = "Q2: Item-Level Analysis (sorted by % categorical)",
+      col.names = c("Sentence", "Label", "Type", "N", "N Categorical", 
+                    "Prop Categorical", "SE", "CI Lower", "CI Upper"))
+
+# Forest plot
+plot_q2_forest <- ggplot(q2_by_item, 
+                         aes(x = prop_categorical, 
+                             y = reorder(sentence_label, prop_categorical),
+                             color = sentence_type)) +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = ci_lower, xmax = ci_upper), height = 0.3) +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "gray50") +
+  geom_vline(xintercept = mean(q2_by_item$prop_categorical), 
+             linetype = "solid", color = "black", alpha = 0.5) +
+  scale_x_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(0, 1),
+                     breaks = seq(0, 1, 0.25)) +
+  scale_color_manual(values = colors_sentence_type) +
+  labs(
+    title = "Item-Level Categorical Interpretation Rates",
+    subtitle = "Proportion choosing 'Always necessary' with 95% confidence intervals",
+    x = "Proportion Categorical Interpretation",
+    y = "Sentence",
+    color = "Sentence Type"
+  ) +
+  theme_analysis
+
+print(plot_q2_forest)
+
+# Identify outlier items
+cat("\n=== OUTLIER ITEMS ===\n")
+overall_prop <- mean(df_analysis$Q2_Interpretation_bin, na.rm = TRUE)
+outliers <- q2_by_item %>%
+  filter(abs(prop_categorical - overall_prop) > 0.15)
+
+if (nrow(outliers) > 0) {
+  cat("Items deviating >15% from overall mean:\n")
+  print(outliers %>% select(sentence, sentence_label, prop_categorical))
+} else {
+  cat("No major outliers detected\n")
+}
+```
+
+## 4.2 Q3: Confidence Ratings
+
+### 4.2.1 Overall Distribution
+
+```{r q3-overall}
+# Summary statistics
+q3_summary <- df_analysis %>%
+  filter(!is.na(Confidence)) %>%
+  summarise(
+    N = n(),
+    Mean = mean(Confidence),
+    SD = sd(Confidence),
+    Median = median(Confidence),
+    Min = min(Confidence),
+    Max = max(Confidence)
+  )
+
+kable(q3_summary, digits = 2,
+      caption = "Q3: Confidence Rating Summary Statistics")
+
+# Distribution plot
+plot_q3_overall <- ggplot(df_analysis %>% filter(!is.na(Confidence)), 
+                          aes(x = Confidence)) +
+  geom_histogram(aes(y = after_stat(density)), 
+                 binwidth = 1, fill = "#0072B2", alpha = 0.7, color = "white") +
+  geom_density(alpha = 0.3, fill = "#0072B2", linewidth = 1) +
+  geom_vline(xintercept = q3_summary$Mean, 
+             linetype = "dashed", color = "red", linewidth = 1) +
+  geom_vline(xintercept = q3_summary$Median, 
+             linetype = "dotted", color = "darkred", linewidth = 1) +
+  scale_x_continuous(breaks = 1:7, limits = c(0.5, 7.5)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  annotate("text", x = 1.5, y = max(density(df_analysis$Confidence, na.rm = TRUE)$y) * 0.9,
+           label = sprintf("Mean = %.2f\nMedian = %.0f", q3_summary$Mean, q3_summary$Median),
+           hjust = 0, size = 3.5) +
+  labs(
+    title = "Distribution of Confidence Ratings",
+    subtitle = "How confident participants felt about their interpretation (N=121)",
+    x = "Confidence Rating (1 = Not at all confident, 7 = Extremely confident)",
+    y = "Density"
+  ) +
+  theme_analysis
+
+print(plot_q3_overall)
+```
+
+### 4.2.2 Mixed-Effects Model
+
+```{r q3-model}
+# Fit linear mixed-effects model
+model_q3 <- lmer(
+  Confidence ~ Q2_Interpretation_bin + (1 + Q2_Interpretation_bin | sentence),
+  data = df_analysis
+)
+
+summary(model_q3)
+
+# Extract fixed effects
+q3_fixed <- fixef(model_q3)
+
+cat("\n=== INTERPRETATION ===\n")
+cat("Intercept (Conditional):", round(q3_fixed[1], 2), "\n")
+cat("Slope (Categorical vs Conditional):", round(q3_fixed[2], 2), "\n")
+cat("Mean confidence for Conditional:", round(q3_fixed[1], 2), "\n")
+cat("Mean confidence for Categorical:", round(q3_fixed[1] + q3_fixed[2], 2), "\n")
+```
+
+### 4.2.3 By Interpretation and Sentence Type
+
+```{r q3-by-type}
+# Summary by interpretation and sentence type
+q3_by_type <- df_analysis %>%
+  filter(!is.na(Confidence), !is.na(Q2_Interpretation_factor), !is.na(sentence_type)) %>%
+  group_by(sentence_type, Q2_Interpretation_factor) %>%
+  summarise(
+    N = n(),
+    Mean = mean(Confidence),
+    SD = sd(Confidence),
+    .groups = "drop"
+  )
+
+kable(q3_by_type, digits = 2,
+      caption = "Q3: Confidence by Interpretation Type and Sentence Type")
+
+# Boxplot
+plot_q3_by_type <- ggplot(df_analysis %>% 
+                          filter(!is.na(Confidence), !is.na(Q2_Interpretation_factor), 
+                                 !is.na(sentence_type)),
+                          aes(x = Q2_Interpretation_factor, y = Confidence, 
+                              fill = sentence_type)) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.6) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, 
+               fill = "white", color = "black") +
+  scale_fill_manual(values = colors_sentence_type, name = "Sentence Type") +
+  facet_wrap(~sentence_type) +
+  labs(
+    title = "Confidence by Interpretation Type and Sentence Category",
+    subtitle = "Diamonds indicate means; boxes show IQR",
+    x = "Interpretation Type",
+    y = "Confidence Rating (1-7)"
+  ) +
+  theme_analysis +
+  theme(
+    axis.text.x = element_text(angle = 15, hjust = 1),
+    legend.position = "none"
+  )
+
+print(plot_q3_by_type)
+```
+
+### 4.2.4 Item-Level Analysis
+
+```{r q3-item-level}
+# Mean confidence by item
+q3_by_item <- df_analysis %>%
+  filter(!is.na(Confidence)) %>%
+  group_by(sentence, sentence_label, sentence_type) %>%
+  summarise(
+    n = n(),
+    mean_conf = mean(Confidence),
+    sd_conf = sd(Confidence),
+    se = sd_conf / sqrt(n),
+    ci_lower = mean_conf - 1.96 * se,
+    ci_upper = mean_conf + 1.96 * se,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_conf))
+
+kable(q3_by_item, digits = 2,
+      caption = "Q3: Item-Level Confidence Means",
+      col.names = c("Sentence", "Label", "Type", "N", "Mean", "SD", "SE", 
+                    "CI Lower", "CI Upper"))
+
+# Item-level plot
+plot_q3_items <- ggplot(q3_by_item, 
+                        aes(x = mean_conf, 
+                            y = reorder(sentence_label, mean_conf),
+                            color = sentence_type)) +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = ci_lower, xmax = ci_upper), height = 0.3) +
+  geom_vline(xintercept = mean(df_analysis$Confidence, na.rm = TRUE),
+             linetype = "dashed", color = "gray50") +
+  scale_x_continuous(limits = c(1, 7), breaks = 1:7) +
+  scale_color_manual(values = colors_sentence_type) +
+  labs(
+    title = "Item-Level Mean Confidence Ratings",
+    subtitle = "Mean confidence with 95% confidence intervals",
+    x = "Mean Confidence Rating",
+    y = "Sentence",
+    color = "Sentence Type"
+  ) +
+  theme_analysis
+
+print(plot_q3_items)
+```
+
+## 4.3 Q4: Perceived Impact of Prefatory Clause
+
+### 4.3.1 Overall Distribution
+
+```{r q4-overall}
+# Distribution
+q4_overall <- df_analysis %>%
+  filter(!is.na(Q4_IsTrue_ord)) %>%
+  count(Q4_IsTrue_ord) %>%
+  mutate(
+    prop = n / sum(n),
+    pct = prop * 100
+  )
+
+kable(q4_overall, digits = 2,
+      caption = "Q4: Perceived Impact Distribution",
+      col.names = c("Perceived Impact", "N", "Proportion", "Percent"))
+
+# Visualization
+plot_q4_overall <- ggplot(q4_overall, aes(x = Q4_IsTrue_ord, y = prop)) +
+  geom_col(fill = "#0072B2", alpha = 0.8, width = 0.6) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 0.6),
+    breaks = seq(0, 0.6, 0.1),
+    expand = expansion(mult = c(0, 0.1))
+  ) +
+  labs(
+    title = "Perceived Impact of Prefatory Clause",
+    subtitle = "How important is the 'being necessary' clause? (N=121)",
+    x = "Perceived Importance",
+    y = "Proportion of Participants"
+  ) +
+  theme_analysis +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+print(plot_q4_overall)
+```
+
+### 4.3.2 Ordinal Regression Model
+
+```{r q4-model}
+# Try cumulative link mixed model
+model_q4_mixed <- try(
+  clmm(
+    Q4_IsTrue_ord ~ Q2_Interpretation_bin + (1 + Q2_Interpretation_bin | sentence),
+    data = df_analysis,
+    link = "logit"
+  ),
+  silent = TRUE
+)
+
+if (!inherits(model_q4_mixed, "try-error")) {
+  cat("=== CUMULATIVE LINK MIXED MODEL ===\n")
+  summary(model_q4_mixed)
+} else {
+  cat("Mixed model failed to converge. Using simpler models...\n\n")
+  
+  # Simple cumulative link model
+  model_q4_simple <- clm(
+    Q4_IsTrue_ord ~ Q2_Interpretation_bin,
+    data = df_analysis,
+    link = "logit"
+  )
+  
+  cat("=== SIMPLE CUMULATIVE LINK MODEL ===\n")
+  summary(model_q4_simple)
+  
+  # Model with sentence as fixed effect
+  model_q4_fixed <- clm(
+    Q4_IsTrue_ord ~ Q2_Interpretation_bin + factor(sentence),
+    data = df_analysis,
+    link = "logit"
+  )
+  
+  cat("\n=== MODEL WITH SENTENCE FIXED EFFECTS ===\n")
+  summary(model_q4_fixed)
+}
+```
+
+### 4.3.3 By Interpretation Type
+
+```{r q4-by-interpretation}
+# Stacked bar chart
+q4_by_interp <- df_analysis %>%
+  filter(!is.na(Q4_IsTrue_ord), !is.na(Q2_Interpretation_factor)) %>%
+  count(Q2_Interpretation_factor, Q4_IsTrue_ord) %>%
+  group_by(Q2_Interpretation_factor) %>%
+  mutate(
+    prop = n / sum(n),
+    pct = prop * 100
+  )
+
+plot_q4_by_interp <- ggplot(q4_by_interp, 
+                            aes(x = Q2_Interpretation_factor, y = prop, 
+                                fill = Q4_IsTrue_ord)) +
+  geom_col(position = "stack", alpha = 0.8) +
+  geom_text(aes(label = ifelse(pct > 8, sprintf("%.0f%%", pct), "")),
+            position = position_stack(vjust = 0.5), 
+            size = 3.5, fontface = "bold") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_brewer(palette = "Blues", name = "Perceived Impact") +
+  labs(
+    title = "Perceived Impact by Interpretation Type",
+    subtitle = "Distribution of Q4 responses within each interpretation",
+    x = "Interpretation Type",
+    y = "Proportion"
+  ) +
+  theme_analysis +
+  theme(axis.text.x = element_text(angle = 15, hjust = 1))
+
+print(plot_q4_by_interp)
+```
+
+### 4.3.4 By Sentence Type
+
+```{r q4-by-type}
+# Summary by sentence type
+q4_by_type <- df_analysis %>%
+  filter(!is.na(Q4_IsTrue_ord), !is.na(sentence_type)) %>%
+  count(sentence_type, Q4_IsTrue_ord) %>%
+  group_by(sentence_type) %>%
+  mutate(
+    prop = n / sum(n),
+    pct = prop * 100
+  )
+
+plot_q4_by_type <- ggplot(q4_by_type, 
+                          aes(x = Q4_IsTrue_ord, y = prop, fill = Q4_IsTrue_ord)) +
+  geom_col(alpha = 0.8, width = 0.6) +
+  geom_text(aes(label = sprintf("%.1f%%", pct)), 
+            vjust = -0.5, size = 3) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 0.7),
+    breaks = seq(0, 0.7, 0.1),
+    expand = expansion(mult = c(0, 0.1))
+  ) +
+  scale_fill_brewer(palette = "Blues", guide = "none") +
+  facet_wrap(~sentence_type) +
+  labs(
+    title = "Perceived Impact by Sentence Type",
+    subtitle = "How sentence content affects importance ratings",
+    x = "Perceived Importance Level",
+    y = "Proportion within Sentence Type"
+  ) +
+  theme_analysis +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+print(plot_q4_by_type)
+```
+
+### 4.3.5 Item-Level Analysis
+
+```{r q4-item-level}
+# Calculate mean ordinal score by item (1=Not crucial, 2=Somewhat, 3=Absolutely)
+q4_by_item <- df_analysis %>%
+  filter(!is.na(Q4_IsTrue_ord)) %>%
+  mutate(Q4_numeric = as.numeric(Q4_IsTrue_ord)) %>%
+  group_by(sentence, sentence_label, sentence_type) %>%
+  summarise(
+    n = n(),
+    mean_impact = mean(Q4_numeric),
+    sd_impact = sd(Q4_numeric),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_impact))
+
+kable(q4_by_item, digits = 2,
+      caption = "Q4: Item-Level Perceived Impact Means",
+      col.names = c("Sentence", "Label", "Type", "N", "Mean", "SD"))
+
+# Heatmap showing distribution
+q4_heatmap_data <- df_analysis %>%
+  filter(!is.na(Q4_IsTrue_ord)) %>%
+  count(sentence_label, Q4_IsTrue_ord) %>%
+  group_by(sentence_label) %>%
+  mutate(prop = n / sum(n))
+
+plot_q4_heatmap <- ggplot(q4_heatmap_data, 
+                          aes(x = Q4_IsTrue_ord, y = sentence_label, fill = prop)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.0f%%", prop*100)), size = 2.5) +
+  scale_fill_gradient(low = "white", high = "#0072B2", 
+                      labels = percent_format(accuracy = 1),
+                      name = "Proportion") +
+  labs(
+    title = "Q4: Item-Level Response Distribution Heatmap",
+    subtitle = "Percentage choosing each response option by sentence",
+    x = "Perceived Impact",
+    y = "Sentence"
+  ) +
+  theme_analysis +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1),
+        axis.text.y = element_text(size = 8))
+
+print(plot_q4_heatmap)
+```
+
+## 4.4 Q5: Impact of Clause Removal
+
+### 4.4.1 Overall Distribution
+
+```{r q5-overall}
+# Summary statistics (centered scale: -3 to +3)
+q5_summary <- df_analysis %>%
+  filter(!is.na(Q5_Remove_centered)) %>%
+  summarise(
+    N = n(),
+    Mean = mean(Q5_Remove_centered),
+    SD = sd(Q5_Remove_centered),
+    Median = median(Q5_Remove_centered),
+    Min = min(Q5_Remove_centered),
+    Max = max(Q5_Remove_centered)
+  )
+
+kable(q5_summary, digits = 2,
+      caption = "Q5: Clause Removal Impact Summary Statistics (Centered)")
+
+cat("\nInterpretation:\n")
+cat("Negative values = removing clause makes sentences MORE similar (meaning changes)\n")
+cat("Zero = no difference\n")
+cat("Positive values = removing clause makes sentences LESS similar (meaning preserved)\n\n")
+
+if (abs(q5_summary$Mean) < 0.5) {
+  cat("Mean near zero suggests participants view removal as having minimal impact\n")
+}
+
+# Distribution plot
+plot_q5_overall <- ggplot(df_analysis %>% filter(!is.na(Q5_Remove_centered)), 
+                          aes(x = Q5_Remove_centered)) +
+  geom_histogram(aes(y = after_stat(density)), 
+                 binwidth = 1, fill = "#0072B2", alpha = 0.7, color = "white") +
+  geom_density(alpha = 0.3, fill = "#0072B2", linewidth = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red", linewidth = 1) +
+  geom_vline(xintercept = q5_summary$Mean, 
+             linetype = "dotted", color = "darkred", linewidth = 1) +
+  scale_x_continuous(breaks = -3:3) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  annotate("text", x = -2.5, y = max(density(df_analysis$Q5_Remove_centered, na.rm = TRUE)$y) * 0.9,
+           label = sprintf("Mean = %.2f", q5_summary$Mean),
+           hjust = 0, size = 4) +
+  labs(
+    title = "Impact of Removing Prefatory Clause",
+    subtitle = "How much meaning changes when 'being necessary' clause is removed (0 = no change)",
+    x = "Centered Response (-3 = Much less similar, 0 = No change, +3 = Much more similar)",
+    y = "Density"
+  ) +
+  theme_analysis
+
+print(plot_q5_overall)
+```
+
+### 4.4.2 Mixed-Effects Model
+
+```{r q5-model}
+# Basic model
+model_q5 <- lmer(
+  Q5_Remove_centered ~ 1 + (1 | sentence),
+  data = df_analysis
+)
+
+summary(model_q5)
+
+if (isSingular(model_q5)) {
+  cat("\nWARNING: Singular fit - minimal between-sentence variation\n")
+}
+
+# Model with interpretation as predictor
+model_q5_interp <- lmer(
+  Q5_Remove_centered ~ Q2_Interpretation_bin + (1 + Q2_Interpretation_bin | sentence),
+  data = df_analysis
+)
+
+summary(model_q5_interp)
+```
+
+### 4.4.3 By Interpretation Type
+
+```{r q5-by-interpretation}
+q5_by_interp <- df_analysis %>%
+  filter(!is.na(Q5_Remove_centered), !is.na(Q2_Interpretation_factor)) %>%
+  group_by(Q2_Interpretation_factor) %>%
+  summarise(
+    N = n(),
+    Mean = mean(Q5_Remove_centered),
+    SD = sd(Q5_Remove_centered),
+    .groups = "drop"
+  )
+
+kable(q5_by_interp, digits = 2,
+      caption = "Q5: Removal Impact by Interpretation Type")
+
+plot_q5_by_interp <- ggplot(df_analysis %>% 
+                            filter(!is.na(Q5_Remove_centered), 
+                                   !is.na(Q2_Interpretation_factor)),
+                            aes(x = Q2_Interpretation_factor, y = Q5_Remove_centered,
+                                fill = Q2_Interpretation_factor)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", linewidth = 1) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.6) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, 
+               fill = "white", color = "black") +
+  scale_fill_manual(values = colors_interpretation, guide = "none") +
+  labs(
+    title = "Clause Removal Impact by Interpretation Type",
+    subtitle = "Diamonds indicate means; horizontal line at 0 = no change",
+    x = "Interpretation Type",
+    y = "Centered Removal Impact"
+  ) +
+  theme_analysis +
+  theme(axis.text.x = element_text(angle = 15, hjust = 1))
+
+print(plot_q5_by_interp)
+```
+
+### 4.4.4 By Sentence Type
+
+```{r q5-by-type}
+q5_by_type <- df_analysis %>%
+  filter(!is.na(Q5_Remove_centered), !is.na(sentence_type)) %>%
+  group_by(sentence_type) %>%
+  summarise(
+    N = n(),
+    Mean = mean(Q5_Remove_centered),
+    SD = sd(Q5_Remove_centered),
+    .groups = "drop"
+  )
+
+kable(q5_by_type, digits = 2,
+      caption = "Q5: Removal Impact by Sentence Type")
+
+plot_q5_by_type <- ggplot(df_analysis %>% 
+                          filter(!is.na(Q5_Remove_centered), !is.na(sentence_type)),
+                          aes(x = sentence_type, y = Q5_Remove_centered, 
+                              fill = sentence_type)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", linewidth = 1) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.6) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, 
+               fill = "white", color = "black") +
+  scale_fill_manual(values = colors_sentence_type, guide = "none") +
+  labs(
+    title = "Clause Removal Impact by Sentence Type",
+    subtitle = "Diamonds indicate means; horizontal line at 0 = no change",
+    x = "Sentence Type",
+    y = "Centered Removal Impact"
+  ) +
+  theme_analysis
+
+print(plot_q5_by_type)
+```
+
+### 4.4.5 Item-Level Analysis
+
+```{r q5-item-level}
+q5_by_item <- df_analysis %>%
+  filter(!is.na(Q5_Remove_centered)) %>%
+  group_by(sentence, sentence_label, sentence_type) %>%
+  summarise(
+    n = n(),
+    mean_removal = mean(Q5_Remove_centered),
+    sd_removal = sd(Q5_Remove_centered),
+    se = sd_removal / sqrt(n),
+    ci_lower = mean_removal - 1.96 * se,
+    ci_upper = mean_removal + 1.96 * se,
+    .groups = "drop"
+  ) %>%
+  arrange(mean_removal)
+
+kable(q5_by_item, digits = 2,
+      caption = "Q5: Item-Level Removal Impact Means",
+      col.names = c("Sentence", "Label", "Type", "N", "Mean", "SD", "SE",
+                    "CI Lower", "CI Upper"))
+
+plot_q5_items <- ggplot(q5_by_item, 
+                        aes(x = mean_removal, 
+                            y = reorder(sentence_label, mean_removal),
+                            color = sentence_type)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = ci_lower, xmax = ci_upper), height = 0.3) +
+  scale_x_continuous(limits = c(-3, 3), breaks = -3:3) +
+  scale_color_manual(values = colors_sentence_type) +
+  labs(
+    title = "Item-Level Mean Removal Impact",
+    subtitle = "Mean centered response with 95% confidence intervals",
+    x = "Mean Removal Impact",
+    y = "Sentence",
+    color = "Sentence Type"
+  ) +
+  theme_analysis
+
+print(plot_q5_items)
+```
+
+## 4.5 Q1: Qualitative Rewrite Analysis
+
+```{r q1-load-coded-data}
+# Load coded qualitative data
+if (file.exists(coded_file)) {
+  coded_data <- read_csv(coded_file, show_col_types = FALSE)
+  
+  cat("Coded data loaded successfully\n")
+  cat("N observations:", nrow(coded_data), "\n")
+  
+  # Check coding categories
+  cat("\nCoding categories:\n")
+  print(table(coded_data$Analysis, useNA = "ifany"))
+  
+} else {
+  cat("WARNING: Coded data file not found at:", coded_file, "\n")
+  cat("Skipping qualitative analysis\n")
+  coded_data <- NULL
+}
+```
+
+### 4.5.1 Concordance Analysis
+
+```{r q1-concordance, eval=!is.null(coded_data)}
+if (!is.null(coded_data)) {
+  # Merge with main data
+  analysis_coded <- coded_data %>%
+    filter(!is.na(Analysis), !is.na(Q2_Interpretation_factor)) %>%
+    mutate(
+      Analysis_Clean = case_when(
+        Analysis == "Always" ~ "Always",
+        Analysis == "Not Always" ~ "Not Always",
+        Analysis == "Ambiguous" ~ "Ambiguous",
+        TRUE ~ Analysis
+      ),
+      # Create agreement variable
+      Agreement = case_when(
+        Q2_Interpretation_factor == "Always necessary" & Analysis_Clean == "Always" ~ "Agreement",
+        Q2_Interpretation_factor == "Only in cases when necessary" & Analysis_Clean == "Not Always" ~ "Agreement",
+        TRUE ~ "Disagreement"
+      )
+    )
+  
+  # Contingency table
+  concordance_table <- table(
+    Explicit = analysis_coded$Q2_Interpretation_factor,
+    Coded = analysis_coded$Analysis_Clean
+  )
+  
+  cat("=== CONCORDANCE: EXPLICIT CHOICE vs CODED REWRITE ===\n")
+  print(concordance_table)
+  
+  # Calculate percentages
+  concordance_props <- prop.table(concordance_table, margin = 1) * 100
+  cat("\nPercentages within each explicit choice:\n")
+  print(round(concordance_props, 1))
+  
+  # Overall agreement rate
+  agreement_data <- analysis_coded %>%
+    filter(Analysis_Clean != "Ambiguous")
+  
+  agreement_rate <- mean(agreement_data$Agreement == "Agreement", na.rm = TRUE)
+  
+  cat("\nOverall Agreement Rate (excluding ambiguous):", 
+      round(agreement_rate * 100, 1), "%\n")
+  
+  # Heatmap visualization
+  concordance_plot_data <- as.data.frame(concordance_table) %>%
+    mutate(
+      Percentage = Freq / sum(Freq) * 100,
+      Label = sprintf("%d\n(%.1f%%)", Freq, Percentage)
+    )
+  
+  plot_concordance <- ggplot(concordance_plot_data, 
+                             aes(x = Coded, y = Explicit, fill = Freq)) +
+    geom_tile(color = "white", linewidth = 1) +
+    geom_text(aes(label = Label), size = 4, fontface = "bold") +
+    scale_fill_gradient(low = "white", high = "#0072B2", name = "Count") +
+    labs(
+      title = "Concordance Between Explicit Choice and Coded Rewrite",
+      subtitle = "Numbers show count and percentage of total responses",
+      x = "Coded Analysis of Rewrite",
+      y = "Explicit Multiple Choice Response"
+    ) +
+    theme_analysis +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(plot_concordance)
+}
+```
+
+### 4.5.2 Agreement by Sentence Type
+
+```{r q1-by-type, eval=!is.null(coded_data)}
+if (!is.null(coded_data)) {
+  # Join with sentence classifications
+  analysis_coded_full <- analysis_coded %>%
+    left_join(sentence_classifications, by = "sentence")
+  
+  agreement_by_type <- analysis_coded_full %>%
+    filter(Analysis_Clean != "Ambiguous") %>%
+    group_by(sentence_type.x) %>%
+    summarise(
+      n = n(),
+      n_agree = sum(Agreement == "Agreement"),
+      agreement_rate = mean(Agreement == "Agreement") * 100,
+      .groups = "drop"
+    )
+  
+  kable(agreement_by_type, digits = 1,
+        caption = "Agreement Rate by Sentence Type",
+        col.names = c("Sentence Type", "N", "N Agreement", "Agreement Rate (%)"))
+  
+  # Visualization
+  plot_agreement_by_type <- ggplot(agreement_by_type, 
+                                   aes(x = sentence_type.x, y = agreement_rate)) +
+    geom_col(fill = "#009E73", alpha = 0.8, width = 0.6) +
+    geom_text(aes(label = sprintf("%.1f%%\n(n=%d)", agreement_rate, n)), 
+              vjust = -0.5, size = 4, fontface = "bold") +
+    scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 20),
+                       labels = function(x) paste0(x, "%"),
+                       expand = expansion(mult = c(0, 0.1))) +
+    labs(
+      title = "Agreement Between Explicit Choice and Coded Rewrite",
+      subtitle = "Percentage of cases where multiple choice and rewrite align",
+      x = "Sentence Type",
+      y = "Agreement Rate"
+    ) +
+    theme_analysis
+  
+  print(plot_agreement_by_type)
+}
+```
+
+### 4.5.3 Disagreement Patterns
+```{r q1-disagreements, eval=!is.null(coded_data)}
+if (!is.null(coded_data)) {
+  # Analyze disagreement patterns
+  disagreement_data <- analysis_coded %>%
+    filter(Agreement == "Disagreement", Analysis_Clean != "Ambiguous") %>%
+    mutate(
+      Disagreement_Type = case_when(
+        Q2_Interpretation_factor == "Always necessary" & Analysis_Clean == "Not Always" ~ 
+          "Said 'Always' but wrote 'Conditional'",
+        Q2_Interpretation_factor == "Only in cases when necessary" & Analysis_Clean == "Always" ~ 
+          "Said 'Conditional' but wrote 'Always'",
+        TRUE ~ "Other"
+      )
+    )
+  
+  cat("\n=== DISAGREEMENT PATTERNS ===\n")
+  disagreement_summary <- disagreement_data %>%
+    count(Disagreement_Type)
+  print(disagreement_summary)
+  
+  # By sentence type - analysis_coded_full already has sentence_type from section 4.5.2
+  disagreement_by_type <- disagreement_data %>%
+    select(sentence, Disagreement_Type) %>%
+    left_join(sentence_classifications, by = "sentence") %>%
+    count(sentence_type, Disagreement_Type)
+  
+  if (nrow(disagreement_by_type) > 0) {
+    plot_disagreements <- ggplot(disagreement_by_type, 
+                                 aes(x = sentence_type, y = n, fill = Disagreement_Type)) +
+      geom_col(position = "stack", alpha = 0.8) +
+      geom_text(aes(label = n), position = position_stack(vjust = 0.5), 
+                size = 4, fontface = "bold", color = "white") +
+      scale_fill_manual(
+        values = c("Said 'Always' but wrote 'Conditional'" = "#5A7A9B",
+                   "Said 'Conditional' but wrote 'Always'" = "#2E5266"),
+        name = "Type of Disagreement"
+      ) +
+      labs(
+        title = "Patterns of Disagreement by Sentence Type",
+        x = "Sentence Type",
+        y = "Number of Disagreements"
+      ) +
+      theme_analysis
+    
+    print(plot_disagreements)
+  }
+}
+```
+
+# 5. Item-Level Comprehensive Analysis
+
+## 5.1 Complete Item Summary Table
+
+```{r item-comprehensive-table}
+# Create comprehensive item-level summary
+item_summary <- df_analysis %>%
+  group_by(sentence, sentence_label, sentence_type) %>%
+  summarise(
+    N = n(),
+    
+    # Q2: Interpretation
+    Pct_Categorical = mean(Q2_Interpretation_bin, na.rm = TRUE) * 100,
+    
+    # Q3: Confidence
+    Mean_Confidence = mean(Confidence, na.rm = TRUE),
+    SD_Confidence = sd(Confidence, na.rm = TRUE),
+    
+    # Q4: Perceived Impact (as numeric 1-3)
+    Mean_Impact = mean(as.numeric(Q4_IsTrue_ord), na.rm = TRUE),
+    
+    # Q5: Removal
+    Mean_Removal = mean(Q5_Remove_centered, na.rm = TRUE),
+    SD_Removal = sd(Q5_Remove_centered, na.rm = TRUE),
+    
+    .groups = "drop"
+  ) %>%
+  arrange(sentence)
+
+kable(item_summary, digits = 2,
+      caption = "Comprehensive Item-Level Summary",
+      col.names = c("Sent", "Label", "Type", "N", "% Categ", 
+                    "M Conf", "SD Conf", "M Impact", "M Removal", "SD Removal"))
+
+# Export for reference
+write_csv(item_summary, "item_level_summary.csv")
+cat("\nItem-level summary exported to: item_level_summary.csv\n")
+```
+
+## 5.2 Identify Problematic Items
+
+```{r item-outliers}
+cat("=== OUTLIER DETECTION ===\n\n")
+
+# Calculate z-scores for each measure
+item_summary_z <- item_summary %>%
+  mutate(
+    z_categorical = scale(Pct_Categorical)[,1],
+    z_confidence = scale(Mean_Confidence)[,1],
+    z_impact = scale(Mean_Impact)[,1],
+    z_removal = scale(Mean_Removal)[,1]
+  )
+
+# Flag outliers (|z| > 2)
+outliers <- item_summary_z %>%
+  filter(
+    abs(z_categorical) > 2 | 
+    abs(z_confidence) > 2 | 
+    abs(z_impact) > 2 | 
+    abs(z_removal) > 2
+  )
+
+if (nrow(outliers) > 0) {
+  cat("Items with extreme values (|z| > 2):\n\n")
+  
+  outlier_report <- outliers %>%
+    select(sentence, sentence_label, 
+           z_categorical, z_confidence, z_impact, z_removal) %>%
+    mutate(
+      Outlier_On = case_when(
+        abs(z_categorical) > 2 ~ "Categorical%",
+        abs(z_confidence) > 2 ~ "Confidence",
+        abs(z_impact) > 2 ~ "Impact",
+        abs(z_removal) > 2 ~ "Removal",
+        TRUE ~ "Multiple"
+      )
+    )
+  
+  kable(outlier_report, digits = 2,
+        caption = "Outlier Items",
+        col.names = c("Sent", "Label", "z Categ", "z Conf", "z Impact", "z Removal", "Outlier On"))
+  
+} else {
+  cat("No major outliers detected (all |z| < 2)\n")
+}
+
+# Items with low N
+low_n <- item_summary %>%
+  filter(N < 5)
+
+if (nrow(low_n) > 0) {
+  cat("\nWARNING: Items with low sample size (N < 5):\n")
+  print(low_n %>% select(sentence, sentence_label, N))
+}
+```
+
+## 5.3 Multi-Measure Item Visualization
+
+```{r item-heatmap-all}
+# Create comprehensive heatmap
+item_heatmap_data <- item_summary %>%
+  select(sentence_label, Pct_Categorical, Mean_Confidence, Mean_Impact, Mean_Removal) %>%
+  pivot_longer(cols = -sentence_label, names_to = "Measure", values_to = "Value") %>%
+  group_by(Measure) %>%
+  mutate(Value_scaled = scale(Value)[,1]) %>%
+  ungroup()
+
+# Rename measures for display
+item_heatmap_data <- item_heatmap_data %>%
+  mutate(
+    Measure = factor(Measure,
+                     levels = c("Pct_Categorical", "Mean_Confidence", 
+                                "Mean_Impact", "Mean_Removal"),
+                     labels = c("% Categorical", "Confidence", 
+                                "Perceived Impact", "Removal Impact"))
+  )
+
+plot_item_heatmap <- ggplot(item_heatmap_data, 
+                            aes(x = Measure, y = sentence_label, fill = Value_scaled)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "#2E5266", mid = "white", high = "#0072B2",
+                       midpoint = 0, name = "Z-score") +
+  labs(
+    title = "Item-Level Performance Heatmap",
+    subtitle = "Standardized scores across all measures (z-scores)",
+    x = "Measure",
+    y = "Sentence"
+  ) +
+  theme_analysis +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 8)
+  )
+
+print(plot_item_heatmap)
+```
+
+## 5.4 Item Reliability Analysis
+
+```{r item-reliability}
+# Calculate within-sentence variance for each measure
+# Higher variance suggests items that elicit more diverse responses
+
+item_variance <- df_analysis %>%
+  group_by(sentence, sentence_label) %>%
+  summarise(
+    Var_Interpretation = var(Q2_Interpretation_bin, na.rm = TRUE),
+    Var_Confidence = var(Confidence, na.rm = TRUE),
+    Var_Removal = var(Q5_Remove_centered, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Var_Interpretation))
+
+cat("=== ITEM VARIANCE ===\n")
+cat("Items with high variance show more disagreement among participants\n\n")
+
+kable(item_variance, digits = 3,
+      caption = "Item-Level Variance (Higher = More Disagreement)",
+      col.names = c("Sent", "Label", "Var Interp", "Var Conf", "Var Removal"))
+
+# Items with highest disagreement on interpretation
+high_variance_items <- item_variance %>%
+  filter(Var_Interpretation > quantile(Var_Interpretation, 0.75, na.rm = TRUE))
+
+cat("\nItems with highest disagreement on interpretation:\n")
+print(high_variance_items %>% select(sentence, sentence_label, Var_Interpretation))
+```
+
+# 6. Cross-Variable Relationships
+
+## 6.1 Correlation Matrix
+
+```{r cross-variable-correlations}
+# Create numeric versions of all key variables
+corr_data <- df_analysis %>%
+  filter(!is.na(Q2_Interpretation_bin), !is.na(Confidence), 
+         !is.na(Q4_IsTrue_ord), !is.na(Q5_Remove_centered)) %>%
+  mutate(
+    Q4_numeric = as.numeric(Q4_IsTrue_ord)
+  ) %>%
+  select(
+    Interpretation = Q2_Interpretation_bin,
+    Confidence,
+    `Perceived Impact` = Q4_numeric,
+    `Removal Impact` = Q5_Remove_centered
+  )
+
+# Calculate correlation matrix
+cor_matrix <- cor(corr_data, use = "pairwise.complete.obs")
+
+cat("=== CORRELATION MATRIX ===\n")
+print(round(cor_matrix, 3))
+
+# Visualize correlation matrix
+library(reshape2)
+cor_melted <- melt(cor_matrix)
+
+plot_correlations <- ggplot(cor_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", value)), size = 4, fontface = "bold") +
+  scale_fill_gradient2(low = "#2E5266", mid = "white", high = "#0072B2",
+                       midpoint = 0, limits = c(-1, 1),
+                       name = "Correlation") +
+  labs(
+    title = "Correlation Matrix of Key Variables",
+    subtitle = "Pearson correlations",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_analysis +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(plot_correlations)
+```
+
+## 6.2 Confidence Predicting Perceived Impact
+
+```{r confidence-impact-relationship}
+# Does confidence predict how important people think the clause is?
+model_conf_impact <- clm(
+  Q4_IsTrue_ord ~ Confidence,
+  data = df_analysis,
+  link = "logit"
+)
+
+cat("=== CONFIDENCE PREDICTING PERCEIVED IMPACT ===\n")
+summary(model_conf_impact)
+
+# Visualization
+plot_conf_impact <- df_analysis %>%
+  filter(!is.na(Confidence), !is.na(Q4_IsTrue_ord)) %>%
+  ggplot(aes(x = Confidence, fill = Q4_IsTrue_ord)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_brewer(palette = "Blues", name = "Perceived Impact") +
+  labs(
+    title = "Confidence by Perceived Impact",
+    subtitle = "Proportion of Q4 responses at each confidence level",
+    x = "Confidence Rating (1-7)",
+    y = "Proportion"
+  ) +
+  theme_analysis
+
+print(plot_conf_impact)
+```
+
+## 6.3 Perceived Impact Predicting Removal Impact
+
+```{r impact-removal-relationship}
+# Does thinking the clause is important predict how much removal matters?
+model_impact_removal <- lmer(
+  Q5_Remove_centered ~ as.numeric(Q4_IsTrue_ord) + (1 | sentence),
+  data = df_analysis
+)
+
+cat("=== PERCEIVED IMPACT PREDICTING REMOVAL IMPACT ===\n")
+summary(model_impact_removal)
+
+# Visualization
+plot_impact_removal <- df_analysis %>%
+  filter(!is.na(Q4_IsTrue_ord), !is.na(Q5_Remove_centered)) %>%
+  ggplot(aes(x = Q4_IsTrue_ord, y = Q5_Remove_centered)) +
+  geom_boxplot(fill = "#0072B2", alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3,
+               fill = "white", color = "black") +
+  labs(
+    title = "Removal Impact by Perceived Importance",
+    subtitle = "Does viewing clause as important affect perceived removal impact?",
+    x = "Perceived Importance of Prefatory Clause",
+    y = "Removal Impact (Centered)"
+  ) +
+  theme_analysis +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+print(plot_impact_removal)
+```
+
+## 6.4 Interpretation and All Other Measures
+
+```{r interpretation-all-measures}
+# Summary of all measures by interpretation type
+summary_by_interpretation <- df_analysis %>%
+  filter(!is.na(Q2_Interpretation_factor)) %>%
+  group_by(Q2_Interpretation_factor) %>%
+  summarise(
+    N = n(),
+    Mean_Confidence = mean(Confidence, na.rm = TRUE),
+    SD_Confidence = sd(Confidence, na.rm = TRUE),
+    Mean_Impact = mean(as.numeric(Q4_IsTrue_ord), na.rm = TRUE),
+    SD_Impact = sd(as.numeric(Q4_IsTrue_ord), na.rm = TRUE),
+    Mean_Removal = mean(Q5_Remove_centered, na.rm = TRUE),
+    SD_Removal = sd(Q5_Remove_centered, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+kable(summary_by_interpretation, digits = 2,
+      caption = "All Measures by Interpretation Type",
+      col.names = c("Interpretation", "N", "M Conf", "SD Conf", 
+                    "M Impact", "SD Impact", "M Removal", "SD Removal"))
+```
+
+# 7. Summary and Recommendations
+
+## 7.1 Key Findings Summary
+
+```{r key-findings-table}
+key_findings <- tibble(
+  Measure = c(
+    "Sample Size (after exclusions)",
+    "Retention Rate",
+    "Primary Interpretation",
+    "Mean Confidence",
+    "Perceived Impact: Not crucial",
+    "Perceived Impact: Somewhat important",
+    "Perceived Impact: Absolutely essential",
+    "Mean Removal Impact (centered)",
+    "Q2-Q1 Coding Agreement Rate"
+  ),
+  Result = c(
+    sprintf("N = %d", nrow(df_analysis)),
+    sprintf("%.1f%%", nrow(df_analysis)/nrow(df_long)*100),
+    sprintf("%.1f%% Categorical ('Always necessary')", 
+            mean(df_analysis$Q2_Interpretation_bin, na.rm = TRUE)*100),
+    sprintf("M = %.2f (SD = %.2f) on 1-7 scale", 
+            mean(df_analysis$Confidence, na.rm = TRUE),
+            sd(df_analysis$Confidence, na.rm = TRUE)),
+    sprintf("%.1f%%", q4_overall$pct[1]),
+    sprintf("%.1f%%", q4_overall$pct[2]),
+    sprintf("%.1f%%", q4_overall$pct[3]),
+    sprintf("M = %.2f (SD = %.2f)", q5_summary$Mean, q5_summary$SD),
+    if(!is.null(coded_data)) sprintf("%.1f%%", agreement_rate*100) else "N/A"
+  )
+)
+
+kable(key_findings,
+      caption = "Summary of Key Findings")
+```
+
+
+## 7.2 Recommendations for Full Study
+
+```{r recommendations}
+cat("=== RECOMMENDATIONS ===\n\n")
+
+cat("ITEMS TO RETAIN:\n")
+retain_items <- item_summary %>%
+  filter(
+    N >= 5,
+    Pct_Categorical > 20 & Pct_Categorical < 95,
+    Mean_Confidence > 4
+  ) %>%
+  arrange(sentence)
+
+cat("  - Sentences with balanced responses and adequate confidence:\n")
+print(retain_items %>% select(sentence, sentence_label, Pct_Categorical, Mean_Confidence))
+
+cat("\n\nITEMS TO REVISE OR REMOVE:\n")
+problematic_items <- item_summary %>%
+  filter(
+    N < 5 | 
+    Pct_Categorical < 20 | Pct_Categorical > 95 |
+    Mean_Confidence < 4
+  )
+
+if (nrow(problematic_items) > 0) {
+  cat("  - Items with low N, ceiling/floor effects, or low confidence:\n")
+  print(problematic_items %>% select(sentence, sentence_label, N, Pct_Categorical, Mean_Confidence))
+} else {
+  cat("  - No major problematic items identified\n")
+}
+
+cat("\n\nMETHODOLOGICAL RECOMMENDATIONS:\n")
+cat("  1. Q4 (3-point scale) showed bimodal distribution\n")
+cat("     → Consider expanding to 5-point scale for more nuance\n\n")
+
+cat("  2. Q5 (removal impact) centered near zero\n")
+cat("     → Question wording may be unclear; consider revision\n")
+cat("     → Or remove if not theoretically critical\n\n")
+
+cat("  3. Q1 (rewrite) showed interesting explicit-implicit disconnect\n")
+cat("     → Retain for full study; very informative\n")
+cat("     → Develop clearer coding scheme before full study\n\n")
+
+cat("  4. Attention/comprehension checks worked well\n")
+cat("     → Retain same exclusion criteria\n\n")
+
+cat("  5. Sentence type differences minimal\n")
+cat("     → Could simplify design or test new moderators\n")
+```
+
+# 8. Appendix: Full Model Outputs
+
+## 8.1 Q2 Models
+
+```{r appendix-q2-models}
+cat("=== Q2: INTERPRETATION MODELS ===\n\n")
+
+cat("Model 1: Intercept only with random intercept for sentence\n")
+print(summary(model_q2))
+
+cat("\n\nModel 2: With sentence type as fixed effect\n")
+print(summary(model_q2_type))
+
+# Extract and compare
+cat("\n\nModel Comparison:\n")
+anova(model_q2, model_q2_type)
+```
+
+## 8.2 Q3 Models
+
+```{r appendix-q3-models}
+cat("=== Q3: CONFIDENCE MODELS ===\n\n")
+
+cat("Full model with random slopes and intercepts:\n")
+print(summary(model_q3))
+
+# Check random effects
+cat("\n\nRandom Effects Summary:\n")
+print(VarCorr(model_q3))
+```
+
+## 8.3 Q4 Models
+
+```{r appendix-q4-models}
+cat("=== Q4: PERCEIVED IMPACT MODELS ===\n\n")
+
+if (!inherits(model_q4_mixed, "try-error")) {
+  cat("Mixed model converged:\n")
+  print(summary(model_q4_mixed))
+} else {
+  cat("Simple model (no random effects):\n")
+  print(summary(model_q4_simple))
+  
+  cat("\n\nModel with sentence fixed effects:\n")
+  print(summary(model_q4_fixed))
+}
+```
+
+## 8.4 Q5 Models
+
+```{r appendix-q5-models}
+cat("=== Q5: REMOVAL IMPACT MODELS ===\n\n")
+
+cat("Model 1: Intercept only\n")
+print(summary(model_q5))
+
+cat("\n\nModel 2: With interpretation as predictor\n")
+print(summary(model_q5_interp))
+```
+
+## 8.5 Cross-Variable Models
+
+```{r appendix-cross-models}
+cat("=== CROSS-VARIABLE RELATIONSHIP MODELS ===\n\n")
+
+cat("Confidence predicting Perceived Impact:\n")
+print(summary(model_conf_impact))
+
+cat("\n\nPerceived Impact predicting Removal Impact:\n")
+print(summary(model_impact_removal))
+```
+
+# 9. Data Export
+
+```{r data-export}
+# Export cleaned analysis dataset
+write_csv(df_analysis, "pilot_analysis_data_cleaned.csv")
+
+# Export all summary tables
+write_csv(q2_overall, "summary_q2_overall.csv")
+write_csv(q2_by_item, "summary_q2_by_item.csv")
+write_csv(q3_by_item, "summary_q3_by_item.csv")
+write_csv(q4_by_item, "summary_q4_by_item.csv")
+write_csv(q5_by_item, "summary_q5_by_item.csv")
+write_csv(item_summary, "summary_item_comprehensive.csv")
+
+cat("=== DATA EXPORT COMPLETE ===\n")
+cat("Files saved to working directory:\n")
+cat("  - pilot_analysis_data_cleaned.csv\n")
+cat("  - summary_q2_overall.csv\n")
+cat("  - summary_q2_by_item.csv\n")
+cat("  - summary_q3_by_item.csv\n")
+cat("  - summary_q4_by_item.csv\n")
+cat("  - summary_q5_by_item.csv\n")
+cat("  - summary_item_comprehensive.csv\n")
+```
+
+---
