@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Two Centuries of Debate Over a Sentence That Readers Find Unambiguous</title>
+<meta name="description" content="Empirical evidence for Second Amendment textualism: how contemporary readers interpret 'being necessary' constructions">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=JetBrains+Mono:wght@400;500&family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --ink-secondary: #4a4a4a;
+    --ink-muted: #767676;
+    --surface: #faf9f7;
+    --surface-warm: #f3f1ed;
+    --surface-card: #ffffff;
+    --accent: #1B3A5C;
+    --accent-light: #2a5580;
+    --accent-bg: #f0f4f8;
+    --accent-red: #A4243B;
+    --border: #e0ddd8;
+    --border-light: #eceae6;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.06);
+    --shadow-md: 0 4px 16px rgba(0,0,0,.07);
+    --serif: 'Newsreader', 'Georgia', serif;
+    --sans: 'DM Sans', -apple-system, sans-serif;
+    --mono: 'JetBrains Mono', 'Menlo', monospace;
+    --max-w: 860px;
+    --max-w-wide: 1080px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.7;
+    color: var(--ink);
+    background: var(--surface);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== HERO ===== */
+  .hero {
+    background: var(--ink);
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 60% at 20% 80%, rgba(27,58,92,.45) 0%, transparent 70%),
+      radial-gradient(ellipse 60% 50% at 85% 20%, rgba(27,58,92,.2) 0%, transparent 60%);
+    pointer-events: none;
+  }
+  .hero-inner {
+    max-width: var(--max-w-wide);
+    margin: 0 auto;
+    padding: 4.5rem 2rem 4rem;
+    position: relative;
+    z-index: 1;
+  }
+  .hero-badges {
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+    margin-bottom: 2.5rem;
+  }
+  .hero-badges a {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: .3rem .7rem;
+    border-radius: 4px;
+    font-size: .72rem;
+    font-family: var(--mono);
+    font-weight: 500;
+    text-decoration: none;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    border: 1px solid rgba(255,255,255,.15);
+    color: rgba(255,255,255,.75);
+    transition: all .2s;
+  }
+  .hero-badges a:hover {
+    border-color: rgba(255,255,255,.4);
+    color: #fff;
+    background: rgba(255,255,255,.06);
+  }
+  .hero h1 {
+    font-family: var(--serif);
+    font-size: clamp(2.2rem, 5vw, 3.4rem);
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -.02em;
+    max-width: 780px;
+    margin-bottom: 1.2rem;
+  }
+  .hero-subtitle {
+    font-family: var(--serif);
+    font-size: clamp(.95rem, 2vw, 1.15rem);
+    font-weight: 300;
+    line-height: 1.6;
+    color: rgba(255,255,255,.65);
+    max-width: 660px;
+    margin-bottom: 2rem;
+    font-style: italic;
+  }
+  .hero-authors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem 1.5rem;
+    font-size: .88rem;
+    color: rgba(255,255,255,.55);
+  }
+  .hero-authors span { white-space: nowrap; }
+  .hero-authors strong { color: rgba(255,255,255,.9); font-weight: 500; }
+  .hero-github {
+    position: absolute;
+    top: 2rem;
+    right: 2rem;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .5rem 1rem;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,.15);
+    color: rgba(255,255,255,.8);
+    text-decoration: none;
+    font-size: .82rem;
+    font-weight: 500;
+    transition: all .2s;
+  }
+  .hero-github:hover {
+    background: rgba(255,255,255,.08);
+    border-color: rgba(255,255,255,.3);
+    color: #fff;
+  }
+  .hero-github svg { width: 18px; height: 18px; fill: currentColor; }
+
+  /* ===== NAV ===== */
+  .nav-bar {
+    background: var(--surface-card);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: var(--shadow-sm);
+  }
+  .nav-inner {
+    max-width: var(--max-w-wide);
+    margin: 0 auto;
+    padding: 0 2rem;
+    display: flex;
+    gap: .25rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .nav-inner::-webkit-scrollbar { display: none; }
+  .nav-inner a {
+    display: inline-block;
+    padding: .75rem .85rem;
+    font-size: .78rem;
+    font-weight: 500;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: var(--ink-muted);
+    white-space: nowrap;
+    border-bottom: 2px solid transparent;
+    transition: all .15s;
+  }
+  .nav-inner a:hover { color: var(--ink); border-bottom-color: var(--border); }
+
+  /* ===== MAIN ===== */
+  .main { max-width: var(--max-w-wide); margin: 0 auto; padding: 0 2rem 5rem; }
+
+  /* ===== SECTIONS ===== */
+  .section { padding: 3.5rem 0 0; }
+  .section-label {
+    font-family: var(--mono);
+    font-size: .68rem;
+    font-weight: 500;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: .6rem;
+  }
+  .section h2 {
+    font-family: var(--serif);
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    font-weight: 500;
+    letter-spacing: -.015em;
+    line-height: 1.2;
+    margin-bottom: 1rem;
+  }
+  .section h3 {
+    font-family: var(--serif);
+    font-size: 1.2rem;
+    font-weight: 500;
+    margin: 2rem 0 .75rem;
+    color: var(--ink);
+  }
+  .section p {
+    max-width: var(--max-w);
+    color: var(--ink-secondary);
+    margin-bottom: 1rem;
+  }
+  .amendment-quote {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 1.05rem;
+    color: var(--ink-muted);
+    border-left: 3px solid var(--accent);
+    padding: .8rem 1.2rem;
+    margin: 1.5rem 0;
+    max-width: var(--max-w);
+    line-height: 1.6;
+  }
+
+  /* ===== STAT HIGHLIGHT ===== */
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .stat-box {
+    background: var(--accent-bg);
+    border: 1px solid rgba(27,58,92,.12);
+    border-radius: 8px;
+    padding: 1.2rem;
+    text-align: center;
+  }
+  .stat-box .stat-val {
+    font-family: var(--serif);
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: var(--accent);
+    line-height: 1.1;
+  }
+  .stat-box .stat-label {
+    font-size: .76rem;
+    color: var(--ink-muted);
+    margin-top: .3rem;
+    line-height: 1.35;
+  }
+
+  /* ===== FINDINGS CARDS ===== */
+  .findings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.25rem;
+    margin: 1.5rem 0;
+  }
+  .finding-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.5rem 1.4rem;
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow .2s, transform .2s;
+  }
+  .finding-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+  .finding-card .finding-num {
+    font-family: var(--mono);
+    font-size: .65rem;
+    font-weight: 500;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: .6rem;
+  }
+  .finding-card .finding-title {
+    font-family: var(--serif);
+    font-size: 1.05rem;
+    font-weight: 600;
+    line-height: 1.35;
+    margin-bottom: .6rem;
+  }
+  .finding-card p { font-size: .88rem; line-height: 1.6; color: var(--ink-secondary); margin: 0; }
+
+  /* ===== TABLES ===== */
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1.25rem 0;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-card);
+    box-shadow: var(--shadow-sm);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  thead th {
+    text-align: left;
+    padding: .7rem 1rem;
+    font-weight: 600;
+    font-size: .72rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    background: var(--surface-warm);
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: .6rem 1rem;
+    border-bottom: 1px solid var(--border-light);
+    color: var(--ink-secondary);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: rgba(0,0,0,.015); }
+  td a { color: var(--accent); text-decoration: none; font-weight: 500; border-bottom: 1px solid rgba(27,58,92,.2); transition: border-color .15s; }
+  td a:hover { border-color: var(--accent); }
+  .sig { font-family: var(--mono); font-size: .8rem; color: var(--accent); }
+  td.mono { font-family: var(--mono); font-size: .82rem; }
+
+  /* ===== HYPOTHESIS CARDS ===== */
+  .hyp-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .hyp-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.3rem 1.4rem;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+  .hyp-card .hyp-id { font-family: var(--mono); font-size: .72rem; font-weight: 500; letter-spacing: .08em; color: var(--accent); }
+  .hyp-card .hyp-desc { font-size: .88rem; color: var(--ink-secondary); line-height: 1.5; flex: 1; }
+  .hyp-card .hyp-status { font-size: .78rem; font-weight: 600; display: flex; align-items: center; gap: .3rem; }
+  .hyp-status.supported { color: #2d8a4e; }
+  .hyp-status.underpowered { color: var(--ink-muted); }
+  .hyp-status.partial { color: #b8860b; }
+
+  /* ===== REPORT LINKS ===== */
+  .report-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .report-card {
+    display: block;
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.3rem 1.5rem;
+    text-decoration: none;
+    box-shadow: var(--shadow-sm);
+    transition: all .2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .report-card:hover { box-shadow: var(--shadow-md); border-color: rgba(27,58,92,.25); transform: translateY(-2px); }
+  .report-card::after {
+    content: '\2192';
+    position: absolute;
+    right: 1.2rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent);
+    font-size: 1.1rem;
+    opacity: 0;
+    transition: all .2s;
+  }
+  .report-card:hover::after { opacity: 1; }
+  .report-card .rc-lang { font-family: var(--mono); font-size: .62rem; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-muted); margin-bottom: .35rem; }
+  .report-card .rc-title { font-family: var(--serif); font-size: 1rem; font-weight: 500; color: var(--ink); margin-bottom: .3rem; padding-right: 1.5rem; }
+  .report-card .rc-desc { font-size: .8rem; color: var(--ink-muted); line-height: 1.45; }
+
+  /* ===== PIPELINE ===== */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: .75rem;
+    margin: 1.5rem 0;
+  }
+  .pipe-step {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+  }
+  .pipe-step .pipe-num { font-family: var(--mono); font-size: .62rem; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-bottom: .3rem; }
+  .pipe-step .pipe-title { font-weight: 600; font-size: .88rem; margin-bottom: .4rem; }
+  .pipe-step .pipe-items { font-size: .78rem; color: var(--ink-muted); line-height: 1.5; }
+
+  /* ===== CODE BLOCK ===== */
+  .code-block {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 8px;
+    padding: 1.2rem 1.4rem;
+    font-family: var(--mono);
+    font-size: .8rem;
+    line-height: 1.65;
+    overflow-x: auto;
+    margin: 1rem 0;
+  }
+  .code-block .comment { color: #6a9955; }
+  .code-block .val { color: #b5cea8; }
+  .code-block .key { color: #9cdcfe; }
+
+  /* ===== FOOTER ===== */
+  .footer {
+    background: var(--ink);
+    color: rgba(255,255,255,.5);
+    padding: 3rem 2rem;
+    margin-top: 3rem;
+  }
+  .footer-inner {
+    max-width: var(--max-w-wide);
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 2rem;
+  }
+  .footer h4 { color: rgba(255,255,255,.85); font-family: var(--serif); font-size: 1rem; font-weight: 500; margin-bottom: .6rem; }
+  .footer p, .footer a { font-size: .82rem; line-height: 1.6; }
+  .footer a { color: rgba(255,255,255,.6); text-decoration: none; transition: color .15s; }
+  .footer a:hover { color: #fff; }
+  .footer .footer-links { display: flex; flex-direction: column; gap: .3rem; }
+  .footer-bottom {
+    max-width: var(--max-w-wide);
+    margin: 2rem auto 0;
+    padding-top: 1.5rem;
+    border-top: 1px solid rgba(255,255,255,.08);
+    font-size: .75rem;
+    font-style: italic;
+    font-family: var(--serif);
+    color: rgba(255,255,255,.35);
+    line-height: 1.6;
+  }
+
+  @media (max-width: 768px) {
+    .hero-inner { padding: 3rem 1.25rem 2.5rem; }
+    .hero-github { position: static; margin-bottom: 1.5rem; width: fit-content; }
+    .main { padding: 0 1.25rem 3rem; }
+    .footer-inner { grid-template-columns: 1fr; gap: 1.5rem; }
+    .nav-inner { padding: 0 1rem; }
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .hero h1, .hero-subtitle, .hero-authors, .hero-badges {
+    animation: fadeUp .6s ease both;
+  }
+  .hero-subtitle { animation-delay: .1s; }
+  .hero-authors { animation-delay: .2s; }
+  .hero-badges { animation-delay: .05s; }
+</style>
+</head>
+<body>
+
+<!-- ===== HERO ===== -->
+<header class="hero">
+  <a class="hero-github" href="https://github.com/DGK-Law-and-Cognition-Lab/SecondAmendmentDependencies" target="_blank" rel="noopener">
+    <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    View on GitHub
+  </a>
+  <div class="hero-inner">
+    <div class="hero-badges">
+      <a href="#">Pre-registered</a>
+      <a href="https://www.r-project.org/" target="_blank" rel="noopener">R 4.5+</a>
+      <a href="https://www.python.org/" target="_blank" rel="noopener">Python 3.10+</a>
+      <a href="https://pavlovia.org/" target="_blank" rel="noopener">Pavlovia</a>
+    </div>
+    <h1>Two Centuries of Debate Over a Sentence That Readers Find Unambiguous</h1>
+    <p class="hero-subtitle">"A well regulated Militia, being necessary to the security of a free State, the right of the people to keep and bear Arms, shall not be infringed."</p>
+    <div class="hero-authors">
+      <span><strong>David G. Kamper</strong> &middot; UCLA &middot; UChicago Law</span>
+      <span><strong>Anna Walburger</strong> &middot; UCLA</span>
+      <span><strong>Idan Blank</strong> &middot; UCLA</span>
+    </div>
+  </div>
+</header>
+
+<!-- ===== NAV ===== -->
+<nav class="nav-bar">
+  <div class="nav-inner">
+    <a href="#reports">Reports</a>
+    <a href="#findings">Findings</a>
+    <a href="#results">Results</a>
+    <a href="#hypotheses">Hypotheses</a>
+    <a href="#figures">Figures</a>
+    <a href="#pipeline">Pipeline</a>
+    <a href="#data">Data</a>
+    <a href="#cite">Cite</a>
+  </div>
+</nav>
+
+<main class="main">
+
+  <!-- ===== REPORTS ===== -->
+  <section class="section" id="reports">
+    <div class="section-label">Analysis Reports</div>
+    <h2>Full Interactive Reports</h2>
+    <p>Each analysis stage is available as an interactive HTML report with code, outputs, and visualizations.</p>
+
+    <div class="report-grid">
+      <a class="report-card" href="Code/R/Study1A/SA_E1A_Power_Analysis_v2.html">
+        <div class="rc-lang">R Markdown</div>
+        <div class="rc-title">Power Analysis</div>
+        <div class="rc-desc">Sample size justification and simulation for target N = 300</div>
+      </a>
+      <a class="report-card" href="Code/R/Study1A/SA_E1A_Stage1_DataAssembly.html">
+        <div class="rc-lang">R Markdown</div>
+        <div class="rc-title">Stage 1: Data Assembly</div>
+        <div class="rc-desc">Merge individual Pavlovia CSVs, join sentence metadata, quality checks</div>
+      </a>
+      <a class="report-card" href="Code/R/Study1A/SA_E1A_Stage2_Exclusions.html">
+        <div class="rc-lang">R Markdown</div>
+        <div class="rc-title">Stage 2: Exclusions</div>
+        <div class="rc-desc">Sequential preregistered exclusion criteria (104 collected, 100 retained)</div>
+      </a>
+      <a class="report-card" href="Code/Python/Study1A/SA_E1A_Stage3_RewriteClassification.html">
+        <div class="rc-lang">Python / Colab</div>
+        <div class="rc-title">Stage 3: Rewrite Classification</div>
+        <div class="rc-desc">Blind LLM classification of open-ended rewrites (Anthropic API)</div>
+      </a>
+      <a class="report-card" href="Code/R/Study1A/SA_E1A_Stage4_HypothesisTesting.html">
+        <div class="rc-lang">R Markdown</div>
+        <div class="rc-title">Stage 4: Hypothesis Testing</div>
+        <div class="rc-desc">All 7 preregistered hypotheses, additional measures, and exploratory analyses</div>
+      </a>
+      <a class="report-card" href="Code/R/Pilot/PilotAnalysis_Final.html">
+        <div class="rc-lang">R Markdown</div>
+        <div class="rc-title">Pilot Analysis</div>
+        <div class="rc-desc">Original pilot study (N = 121, Qualtrics), full results and figures</div>
+      </a>
+    </div>
+  </section>
+
+  <!-- ===== KEY FINDINGS ===== -->
+  <section class="section" id="findings">
+    <div class="section-label">Study 1A</div>
+    <h2>Key Findings</h2>
+    <p>We constructed 20 sentences mirroring the Second Amendment's grammatical structure but using politically neutral content. Each participant read one sentence and provided forced-choice interpretations, open-ended rewrites, confidence ratings, and clause-manipulation judgments.</p>
+
+    <div class="stat-row">
+      <div class="stat-box">
+        <div class="stat-val">90.5%</div>
+        <div class="stat-label">Categorical<br>interpretation</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val">0</div>
+        <div class="stat-label">Conditional rewrites<br>(from anyone)</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val">5.56</div>
+        <div class="stat-label">Mean confidence<br>(1-7 scale)</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val">p = .25</div>
+        <div class="stat-label">Gun attitudes vs.<br>interpretation</div>
+      </div>
+    </div>
+
+    <div class="findings-grid">
+      <div class="finding-card">
+        <div class="finding-num">Finding 1</div>
+        <div class="finding-title">The Categorical Reading Is the Default</div>
+        <p>90.5% of participants interpreted "being necessary" constructions as categorical assertions: both the necessity and the right always hold. GLMM intercept = 2.44 log-odds, p &lt; .0001.</p>
+      </div>
+      <div class="finding-card">
+        <div class="finding-num">Finding 2</div>
+        <div class="finding-title">Nobody Writes Conditionally</div>
+        <p>When asked to rewrite the sentence in their own words, not a single participant (0/100) produced conditional language. Even the 9 participants who chose "conditional" on the forced-choice question wrote categorically.</p>
+      </div>
+      <div class="finding-card">
+        <div class="finding-num">Finding 3</div>
+        <div class="finding-title">The Prefatory Clause Is Contextual</div>
+        <p>Removing the prefatory clause produces only modest perceived change (M = 3.22, below the "neither similar nor different" midpoint of 4). Readers treat the clause as context, not as a condition.</p>
+      </div>
+      <div class="finding-card">
+        <div class="finding-num">Finding 4</div>
+        <div class="finding-title">Politics Don't Predict the Parse</div>
+        <p>Gun control attitudes do not predict interpretation (logistic regression, p = .25). The categorical reading is not driven by political orientation. Age and gender also show no effect on interpretation.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== RESULTS TABLE ===== -->
+  <section class="section" id="results">
+    <div class="section-label">Results</div>
+    <h2>Study 1A Results Summary</h2>
+
+    <h3>Preregistered Hypotheses</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Hypothesis</th><th>Test</th><th>Result</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>H1: Categorical bias</td><td class="mono">GLMM intercept</td><td class="mono">2.44, z = 4.06, p &lt; .0001</td><td class="sig">Supported</td></tr>
+          <tr><td>H2: Comma sensitivity</td><td class="mono">LMM contrast</td><td class="mono">3v1 = 2.07 > 3v2 = 1.79, p = .0015</td><td class="sig">Supported</td></tr>
+          <tr><td>H3: Paradox</td><td class="mono">t-test</td><td class="mono">n = 6, M = 4.50</td><td style="color:var(--ink-muted)">Underpowered</td></tr>
+          <tr><td>H4a: Confidence > midpoint</td><td class="mono">t-tests</td><td class="mono">Cat = 5.67, Cond = 5.00, both p &lt; .05</td><td class="sig">Supported</td></tr>
+          <tr><td>H4b: Confidence equivalence</td><td class="mono">TOST</td><td class="mono">90% CI [-0.04, 1.38]</td><td style="color:#b8860b">Not established</td></tr>
+          <tr><td>H5c: Concordance difference</td><td class="mono">Proportion test</td><td class="mono">&chi;&sup2; = 50.27, p &lt; .0001</td><td class="sig">Supported</td></tr>
+          <tr><td>H6: Bimodality</td><td class="mono">GMM (mclust)</td><td class="mono">n = 14</td><td style="color:var(--ink-muted)">Underpowered</td></tr>
+          <tr><td>H7: Removal by group</td><td class="mono">t-tests</td><td class="mono">Cat = 3.22 (p &lt; .0001); Cond = 4.33 (p = .70)</td><td class="sig">Supported</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Additional Measures</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Measure</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>"And" insertion impact</td><td class="mono">M = 3.25, below midpoint (p &lt; .0001)</td></tr>
+          <tr><td>Distinguish: "because" vs "for the purpose of"</td><td class="mono">61% chose "because," 33% chose "for the purpose of"</td></tr>
+          <tr><td>Comma Position 1 (before "being necessary")</td><td class="mono">70% placed comma</td></tr>
+          <tr><td>Comma Position 2 (before "the right of")</td><td class="mono">89% placed comma</td></tr>
+          <tr><td>Comma Position 3 (before "must not be")</td><td class="mono">50% placed comma</td></tr>
+          <tr><td>Recovered original 3-comma structure</td><td class="mono">33% of participants</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Exploratory: Individual Differences</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Predictor</th><th>DV</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>Gun control attitudes</td><td>Interpretation</td><td class="mono">OR = 1.65, p = .25</td></tr>
+          <tr><td>Gun control attitudes</td><td>Confidence</td><td class="mono">r = -.003, p = .98</td></tr>
+          <tr><td>Gun control attitudes</td><td>Removal impact</td><td class="mono">r = -.065, p = .52</td></tr>
+          <tr><td>Age</td><td>Interpretation</td><td class="mono">p = .83</td></tr>
+          <tr><td>Gender</td><td>Interpretation</td><td class="mono">Male 82%, Female 90% cat; p = .16</td></tr>
+          <tr><td>Gender</td><td>Confidence</td><td class="mono">Male 5.82 vs Female 5.33, p = .037</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== HYPOTHESES ===== -->
+  <section class="section" id="hypotheses">
+    <div class="section-label">Pre-registered</div>
+    <h2>Hypotheses</h2>
+    <div class="hyp-grid">
+      <div class="hyp-card">
+        <div class="hyp-id">H1</div>
+        <div class="hyp-desc">Participants will predominantly interpret the sentence as categorical rather than conditional</div>
+        <div class="hyp-status supported">&#10003; Supported (90.5%)</div>
+      </div>
+      <div class="hyp-card">
+        <div class="hyp-id">H2</div>
+        <div class="hyp-desc">Removing two commas will produce greater perceived meaning change than removing one</div>
+        <div class="hyp-status supported">&#10003; Supported (p = .0015)</div>
+      </div>
+      <div class="hyp-card">
+        <div class="hyp-id">H3</div>
+        <div class="hyp-desc">"Absolutely essential" raters will still perceive removal as producing similar implications</div>
+        <div class="hyp-status underpowered">n = 6, underpowered</div>
+      </div>
+      <div class="hyp-card">
+        <div class="hyp-id">H4</div>
+        <div class="hyp-desc">Both groups confident above midpoint; groups equivalent in confidence</div>
+        <div class="hyp-status partial">Partial: both above midpoint; equivalence not established</div>
+      </div>
+      <div class="hyp-card">
+        <div class="hyp-id">H5</div>
+        <div class="hyp-desc">Rewrite concordance higher among categorical than conditional interpreters</div>
+        <div class="hyp-status supported">&#10003; Supported (94.2% vs 0%)</div>
+      </div>
+      <div class="hyp-card">
+        <div class="hyp-id">H6</div>
+        <div class="hyp-desc">Perceived-importance responses will be bimodal</div>
+        <div class="hyp-status underpowered">n = 14, underpowered</div>
+      </div>
+      <div class="hyp-card">
+        <div class="hyp-id">H7</div>
+        <div class="hyp-desc">Categorical interpreters see removal as producing similar implications; conditional interpreters near midpoint</div>
+        <div class="hyp-status supported">&#10003; Supported (3.22 vs 4.33)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== FIGURES ===== -->
+  <section class="section" id="figures">
+    <div class="section-label">Visualizations</div>
+    <h2>Figures</h2>
+
+    <h3>Main Paper</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Figure</th><th>Description</th><th>Link</th></tr></thead>
+        <tbody>
+          <tr><td>Fig 1</td><td>Interpretation distribution (categorical / conditional / neither)</td><td><a href="Figures/Study1A/Fig1.pdf">PDF</a></td></tr>
+          <tr><td>Fig 4</td><td>Concordance heatmap: forced-choice vs. blind rewrite classification</td><td><a href="Figures/Study1A/Fig4.pdf">PDF</a></td></tr>
+          <tr><td>Fig 5</td><td>Removal impact by interpretation group</td><td><a href="Figures/Study1A/Fig5.pdf">PDF</a></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Supplementary</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Figure</th><th>Description</th><th>Link</th></tr></thead>
+        <tbody>
+          <tr><td>Fig 2</td><td>Comma sensitivity ratings (3 pairwise comparisons)</td><td><a href="Figures/Study1A/Fig2.pdf">PDF</a></td></tr>
+          <tr><td>Fig 3</td><td>Confidence by interpretation group (violin + jitter)</td><td><a href="Figures/Study1A/Fig3.pdf">PDF</a></td></tr>
+          <tr><td>Fig 6</td><td>Removal impact overall distribution</td><td><a href="Figures/Study1A/Fig6.pdf">PDF</a></td></tr>
+          <tr><td>Fig 7</td><td>Comma placement at canonical positions (70% / 89% / 50%)</td><td><a href="Figures/Study1A/Fig7.pdf">PDF</a></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== PIPELINE ===== -->
+  <section class="section" id="pipeline">
+    <div class="section-label">Workflow</div>
+    <h2>Analysis Pipeline</h2>
+    <div class="pipeline">
+      <div class="pipe-step">
+        <div class="pipe-num">Stage 0</div>
+        <div class="pipe-title">Power Analysis</div>
+        <div class="pipe-items">Simulation-based sample size justification, target N&nbsp;=&nbsp;300</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">Stage 1</div>
+        <div class="pipe-title">Data Assembly</div>
+        <div class="pipe-items">Merge Pavlovia CSVs, strip prefixes, join sentence metadata (20 stimuli)</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">Stage 2</div>
+        <div class="pipe-title">Exclusions</div>
+        <div class="pipe-items">7 sequential criteria: CAPTCHA, SPR, edit distance, seriousness, AI, consent, duration</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">Stage 3</div>
+        <div class="pipe-title">Rewrite Classification</div>
+        <div class="pipe-items">Blind LLM coding (Claude Sonnet 4, Anthropic API): categorical, conditional, ambiguous</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">Stage 4</div>
+        <div class="pipe-title">Hypothesis Testing</div>
+        <div class="pipe-items">H1-H7 (preregistered), additional measures (and, distinguish, commas), exploratory (gun, age, gender)</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">Figures</div>
+        <div class="pipe-title">Visualization</div>
+        <div class="pipe-items">7 publication-ready figures (3 main, 4 supplementary)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== DATA ===== -->
+  <section class="section" id="data">
+    <div class="section-label">Open Data</div>
+    <h2>Data Files</h2>
+
+    <h3>Study 1A</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Description</th><th>Rows</th></tr></thead>
+        <tbody>
+          <tr><td><a href="Data/Study1A/SA_E1A_merged.csv">SA_E1A_merged.csv</a></td><td>All collected responses with sentence metadata</td><td class="mono">104</td></tr>
+          <tr><td><a href="Data/Study1A/SA_E1A_merged_with_exclusions.csv">SA_E1A_merged_with_exclusions.csv</a></td><td>Merged data with exclusion flags and reasons</td><td class="mono">104</td></tr>
+          <tr><td><a href="Data/Study1A/SA_E1A_analytic.csv">SA_E1A_analytic.csv</a></td><td>Final analytic sample after all exclusions</td><td class="mono">100</td></tr>
+          <tr><td><a href="Data/Study1A/SA_E1A_rewrite_classifications.csv">SA_E1A_rewrite_classifications.csv</a></td><td>Blind LLM classifications with justifications</td><td class="mono">100</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Pilot</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><a href="Data/Pilot/Cleaned_Numeric_Second_Amendment_Dependencies_Pilot.csv">Numeric responses</a></td><td>All Likert and forced-choice responses (N = 121)</td></tr>
+          <tr><td><a href="Data/Pilot/Cleaned_Response_Second_Amendment_Dependencies_Pilot.csv">Text responses</a></td><td>Open-ended rewrites and free-text fields</td></tr>
+          <tr><td><a href="Data/Pilot/q1_rewrite_responses_for_coding.csv">Rewrite coding</a></td><td>Human-coded rewrite classifications</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== CITATION ===== -->
+  <section class="section" id="cite">
+    <div class="section-label">Reference</div>
+    <h2>Citation</h2>
+    <div class="code-block"><span class="comment">@article</span>{kamper2026secondamendment,
+  <span class="key">title</span>   = {Two Centuries of Debate Over a Sentence That Readers
+           Find Unambiguous},
+  <span class="key">author</span>  = {Kamper, David G. and Walburger, Anna and Blank, Idan},
+  <span class="key">year</span>    = {<span class="val">2026</span>},
+  <span class="key">note</span>    = {Manuscript in preparation}
+}</div>
+
+    <h3>Ethics</h3>
+    <p>This research was approved by the UCLA Institutional Review Board. All participants provided informed consent. No identifying information beyond Prolific IDs is collected.</p>
+  </section>
+
+</main>
+
+<!-- ===== FOOTER ===== -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div>
+      <h4>About This Research</h4>
+      <p>This project is part of the Law and Cognition Lab's research on how ordinary readers process legal language. The central finding is that the "ordinary meaning" of the Second Amendment's syntactic structure aligns with the categorical reading adopted in <em>Heller</em>, and that this reading is independent of political orientation.</p>
+    </div>
+    <div>
+      <h4>Links</h4>
+      <div class="footer-links">
+        <a href="https://github.com/DGK-Law-and-Cognition-Lab/SecondAmendmentDependencies">GitHub Repository</a>
+        <a href="Code/R/Study1A/SA_E1A_Stage4_HypothesisTesting.html">Full Results</a>
+        <a href="Code/R/Pilot/PilotAnalysis_Final.html">Pilot Analysis</a>
+      </div>
+    </div>
+    <div>
+      <h4>Contact</h4>
+      <div class="footer-links">
+        <a href="mailto:davidgkamper@ucla.edu">David G. Kamper</a>
+        <a href="mailto:iblank@psych.ucla.edu">Idan Blank</a>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    The perceived ambiguity at the heart of two centuries of legal debate may reflect the structure of that debate rather than the structure of the language.
+  </div>
+</footer>
+
+<!-- Sticky nav highlight -->
+<script>
+  const sections = document.querySelectorAll('.section[id]');
+  const navLinks = document.querySelectorAll('.nav-inner a');
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navLinks.forEach(a => a.classList.remove('active'));
+        const link = document.querySelector('.nav-inner a[href="#' + e.target.id + '"]');
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => obs.observe(s));
+</script>
+</body>
+</html>
