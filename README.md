@@ -1,4 +1,4 @@
-# Second Amendment Dependencies
+# WORKING TITLE: A well regulated experiment, being necessary for constitutional debate: Empirical evidence for Second Amendment textualism
 
 An empirical investigation of how contemporary readers interpret sentences with syntactic structures analogous to the Second Amendment of the United States Constitution.
 
@@ -239,4 +239,4 @@ This repository is intended for academic research purposes. Please contact the a
 
 ## Citation
 
-> Kamper, D. G., Walburger, A., & Blank, I. (2025). Two centuries of debate over a sentence that readers find unambiguous. Manuscript in preparation, University of California, Los Angeles.
+> Kamper, D. G., Walburger, A., & Blank, I. (2025). WORKING TITLE: A well regulated experiment, being necessary for constitutional debate: Empirical evidence for Second Amendment textualism. Manuscript in preparation, University of California, Los Angeles, University of Chicago Law School.
