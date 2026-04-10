@@ -1,0 +1,1424 @@
+---
+title: "SA_E1A — Stage 4: Hypothesis Testing"
+author: "David G. Kamper"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = TRUE, message = TRUE)
+```
+
+# Overview
+
+This document implements the seven preregistered hypotheses for SA_E1A, following
+the analysis plan exactly as specified in the AsPredicted preregistration. All tests
+are at α = .05 unless otherwise noted. No family-wise correction is applied across
+the hypothesis set, as justified in the preregistration (the hypotheses address
+conceptually distinct questions).
+
+**Important limitation:** The perceived-importance question (`istrue`) was only
+presented to participants who selected the conditional or neither interpretation
+(n = 14). This limits H3 (n = 6 for the "absolutely essential" subgroup) and
+H6 (n = 14 for bimodality testing). These analyses are reported as preregistered
+but should be interpreted with extreme caution given the small samples.
+
+
+# 1. Setup
+
+```{r config}
+# ──────────────────────────────────────────────────────────────────────
+# PATHS
+# ──────────────────────────────────────────────────────────────────────
+
+data_dir <- "/Users/dgkamper/Library/CloudStorage/GoogleDrive-dgkamper@gmail.com/My Drive/DGK Lab/Collaborations/BlankLang Lab/DGK Lab - BlankLangLab - Second Amendment Language Dependencies/Data/Study 1"
+
+analytic_file        <- file.path(data_dir, "SA_E1A_analytic.csv")
+classification_file  <- file.path(data_dir, "SA_E1A_rewrite_classifications.csv")
+```
+
+```{r libraries, message=FALSE}
+# ──────────────────────────────────────────────────────────────────────
+# LIBRARIES
+#
+# lme4:    Generalized and linear mixed-effects models (H1, H2, H7)
+# mclust:  Gaussian mixture models (H6)
+# boot:    Bootstrap confidence intervals (H5)
+# emmeans: Estimated marginal means and contrasts (H2)
+# tidyr:   Data reshaping (H2 long format)
+# ──────────────────────────────────────────────────────────────────────
+
+library(lme4)
+library(mclust)
+library(boot)
+library(emmeans)
+library(tidyr)
+```
+
+```{r load-data}
+# ──────────────────────────────────────────────────────────────────────
+# LOAD DATA
+# ──────────────────────────────────────────────────────────────────────
+
+df <- read.csv(analytic_file, stringsAsFactors = FALSE)
+cat("Analytic sample:", nrow(df), "participants\n")
+cat("Sentences represented:", length(unique(df$sentence_id)), "of 20\n")
+
+# Load rewrite classifications from Stage 3
+rewrite_codes <- read.csv(classification_file, stringsAsFactors = FALSE)
+df <- merge(df, rewrite_codes[, c("prolific_pid", "rewrite_code")],
+            by = "prolific_pid", all.x = TRUE)
+cat("Rewrite classifications joined:", sum(!is.na(df$rewrite_code)), "of", nrow(df), "\n")
+```
+
+```{r prepare-variables}
+# ──────────────────────────────────────────────────────────────────────
+# PREPARE VARIABLES
+#
+# Convert response columns to appropriate types and create derived
+# variables needed for hypothesis testing.
+# ──────────────────────────────────────────────────────────────────────
+
+# Core DVs — convert from character to numeric
+df$interpretation <- as.integer(df$interpretation)  # 1=conditional, 2=categorical, 3=neither
+df$confidence     <- as.integer(df$confidence)       # 1-7 scale
+df$remove         <- as.integer(df$remove)           # 1-7 scale (1=same, 4=midpoint, 7=different)
+df$comma_3v2      <- as.integer(df$comma_3v2)        # 1-4 scale
+df$comma_3v1      <- as.integer(df$comma_3v1)        # 1-4 scale
+df$comma_2v1      <- as.integer(df$comma_2v1)        # 1-4 scale
+df$sentence_id    <- as.factor(df$sentence_id)       # factor for random effects
+
+# Binary interpretation variable for H1
+# Exclude "neither" (interpretation = 3) from the primary binary analysis.
+# Categorical = 1, Conditional = 0.
+df$interp_binary <- ifelse(df$interpretation == 2, 1,
+                    ifelse(df$interpretation == 1, 0, NA))
+
+# Perceived importance (istrue): only available for conditional/neither interpreters
+# 1 = not crucial, 2 = somewhat important, 3 = absolutely essential
+df$istrue <- as.integer(ifelse(df$istrue == "" | is.na(df$istrue), NA, df$istrue))
+
+# Interpretation group labels (for readability in output)
+df$interp_label <- ifelse(df$interpretation == 2, "categorical",
+                   ifelse(df$interpretation == 1, "conditional", "neither"))
+
+cat("\nVariable summary:\n")
+cat("  Interpretation: categorical =", sum(df$interpretation == 2),
+    ", conditional =", sum(df$interpretation == 1),
+    ", neither =", sum(df$interpretation == 3), "\n")
+cat("  Participants with istrue data:", sum(!is.na(df$istrue)), "\n")
+cat("  Rewrite codes:", table(df$rewrite_code), "\n")
+```
+
+
+# 2. H1 — Categorical Interpretation Bias
+
+**Preregistered prediction:** Participants will predominantly interpret the sentence
+as categorical rather than conditional.
+
+**Test:** Logistic mixed-effects model with sentence-level random intercept.
+`interp_binary ~ 1 + (1 | sentence_id)`, where categorical = 1 and conditional = 0.
+A significant positive intercept indicates a bias toward categorical interpretation.
+"Neither" responses are excluded from this binary analysis but reported descriptively.
+
+```{r h1}
+# ──────────────────────────────────────────────────────────────────────
+# H1: CATEGORICAL INTERPRETATION BIAS
+# ──────────────────────────────────────────────────────────────────────
+
+# Subset to binary responses only (exclude "neither")
+df_binary <- df[!is.na(df$interp_binary), ]
+cat("H1 sample: n =", nrow(df_binary), "(excluding", sum(df$interpretation == 3), "'neither' responses)\n\n")
+
+# Fit logistic GLMM with bobyqa optimizer as preregistered
+h1_model <- glmer(
+  interp_binary ~ 1 + (1 | sentence_id),
+  data = df_binary,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+# Extract results
+h1_summary <- summary(h1_model)
+h1_intercept <- fixef(h1_model)["(Intercept)"]
+h1_se <- sqrt(vcov(h1_model)["(Intercept)", "(Intercept)"])
+h1_z <- h1_intercept / h1_se
+h1_p <- 2 * pnorm(abs(h1_z), lower.tail = FALSE)
+
+# Convert log-odds to probability
+h1_prob <- plogis(h1_intercept)
+
+cat("═══ H1 RESULTS ═══\n")
+cat("  Log-odds intercept:", round(h1_intercept, 3), "\n")
+cat("  SE:", round(h1_se, 3), "\n")
+cat("  z:", round(h1_z, 3), "\n")
+cat("  p:", format.pval(h1_p, digits = 3), "\n")
+cat("  Predicted probability of categorical:", round(h1_prob, 3), "\n")
+cat("  Observed proportion categorical:", round(mean(df_binary$interp_binary), 3), "\n")
+cat("\n  'Neither' responses (excluded):", sum(df$interpretation == 3),
+    "(", round(mean(df$interpretation == 3) * 100, 1), "%)\n")
+
+# Print full model summary for reference
+print(h1_summary)
+```
+
+
+# 3. H2 — Comma Sensitivity
+
+**Preregistered prediction:** The 3-comma vs. 1-comma comparison (two commas removed)
+will receive higher meaning-change ratings than the one-comma-removed comparisons.
+
+**Test:** Linear mixed model on the three within-subject comma ratings. Each participant
+provides three ratings (comma_3v2, comma_3v1, comma_2v1). We reshape to long format
+and fit: `rating ~ comparison + (1 | prolific_pid) + (1 | sentence_id)`.
+Primary contrast: 3v1 vs. average of (3v2 and 2v1).
+
+```{r h2}
+# ──────────────────────────────────────────────────────────────────────
+# H2: COMMA SENSITIVITY
+# ──────────────────────────────────────────────────────────────────────
+
+# Reshape to long format: three rows per participant
+df_comma <- data.frame(
+  prolific_pid = rep(df$prolific_pid, 3),
+  sentence_id  = rep(df$sentence_id, 3),
+  comparison   = factor(rep(c("3v2", "3v1", "2v1"), each = nrow(df)),
+                        levels = c("3v2", "3v1", "2v1")),
+  rating       = c(df$comma_3v2, df$comma_3v1, df$comma_2v1)
+)
+
+cat("H2 long-format data:", nrow(df_comma), "observations",
+    "(", nrow(df), "participants × 3 comparisons)\n\n")
+
+# Descriptive means
+cat("Descriptive means:\n")
+for (comp in c("3v2", "3v1", "2v1")) {
+  vals <- df_comma$rating[df_comma$comparison == comp]
+  commas_removed <- ifelse(comp == "3v1", "2 commas removed", "1 comma removed")
+  cat(sprintf("  %s (%s): mean = %.2f, SD = %.2f\n",
+              comp, commas_removed, mean(vals), sd(vals)))
+}
+
+# Fit linear mixed model
+# Random intercepts for participant and sentence
+h2_model <- lmer(
+  rating ~ comparison + (1 | prolific_pid) + (1 | sentence_id),
+  data = df_comma
+)
+
+cat("\nModel summary:\n")
+print(summary(h2_model))
+
+# Primary contrast: 3v1 vs. average of (3v2, 2v1)
+# Using emmeans for clean pairwise comparisons
+h2_emm <- emmeans(h2_model, "comparison")
+cat("\nEstimated marginal means:\n")
+print(h2_emm)
+
+# Pairwise contrasts
+cat("\nPairwise comparisons:\n")
+h2_pairs <- pairs(h2_emm)
+print(h2_pairs)
+
+# Primary contrast: 3v1 vs. average of one-comma-removed conditions
+cat("\nPrimary contrast (3v1 vs. average of 3v2 and 2v1):\n")
+h2_contrast <- contrast(h2_emm, list("2-comma vs 1-comma" = c(-0.5, 1, -0.5)))
+print(h2_contrast)
+
+cat("\n═══ H2 RESULTS ═══\n")
+cat("  Prediction: 3v1 > 3v2 and 3v1 > 2v1\n")
+cat("  Observed means: 3v1 =", round(mean(df$comma_3v1), 2),
+    ", 3v2 =", round(mean(df$comma_3v2), 2),
+    ", 2v1 =", round(mean(df$comma_2v1), 2), "\n")
+cat("  Direction consistent with prediction:",
+    mean(df$comma_3v1) > mean(df$comma_3v2) &
+    mean(df$comma_3v1) > mean(df$comma_2v1), "\n")
+```
+
+
+# 4. H3 — The Contextual Significance Paradox
+
+**Preregistered prediction:** Among participants who rate the prefatory clause as
+"absolutely essential" (istrue = 3), mean removal-impact ratings will fall below
+the scale midpoint of 4.
+
+**Test:** One-sided t-test. H₀: μ ≥ 4 vs. H₁: μ < 4.
+
+**IMPORTANT LIMITATION:** The perceived-importance question (`istrue`) was only
+shown to conditional and neither interpreters in Study 1 (n = 14). Only 6 of these
+selected "absolutely essential." This test is therefore severely underpowered.
+In the pilot, all participants answered this question.
+
+```{r h3}
+# ──────────────────────────────────────────────────────────────────────
+# H3: THE PARADOX
+# ──────────────────────────────────────────────────────────────────────
+
+# Subset to participants who answered "absolutely essential" (istrue = 3)
+df_essential <- df[!is.na(df$istrue) & df$istrue == 3, ]
+
+cat("H3 sample: n =", nrow(df_essential), "participants rated 'absolutely essential'\n")
+cat("  (out of", sum(!is.na(df$istrue)), "who answered the perceived-importance question)\n\n")
+
+if (nrow(df_essential) >= 3) {
+  # Descriptive
+  cat("Removal-impact ratings among 'absolutely essential' raters:\n")
+  cat("  Mean:", round(mean(df_essential$remove), 2), "\n")
+  cat("  SD:", round(sd(df_essential$remove), 2), "\n")
+  cat("  Range: [", min(df_essential$remove), ",", max(df_essential$remove), "]\n\n")
+  
+  # One-sided t-test: mean < 4 (midpoint)
+  h3_test <- t.test(df_essential$remove, mu = 4, alternative = "less")
+  
+  cat("═══ H3 RESULTS ═══\n")
+  cat("  One-sided t-test: H₀: μ ≥ 4 vs H₁: μ < 4\n")
+  cat("  t =", round(h3_test$statistic, 3), "\n")
+  cat("  df =", round(h3_test$parameter, 1), "\n")
+  cat("  p =", format.pval(h3_test$p.value, digits = 3), "\n")
+  cat("  95% CI upper bound:", round(h3_test$conf.int[2], 2), "\n")
+  cat("  Mean:", round(h3_test$estimate, 2), "\n")
+  cat("\n  *** WARNING: n =", nrow(df_essential), "is too small for reliable inference. ***\n")
+  cat("  This result should be interpreted with extreme caution.\n")
+} else {
+  cat("  *** INSUFFICIENT DATA: Cannot run H3 with n =", nrow(df_essential), "***\n")
+}
+```
+
+
+# 5. H4 — Confidence Equivalence
+
+**Preregistered prediction:** Both interpretation groups will report confidence above
+the scale midpoint (4), and the groups will not differ meaningfully in confidence.
+
+**Test:** (a) Within each group, one-sided t-test: mean confidence > 4.
+(b) TOST equivalence test on the group difference with bounds Δ = ±0.5 scale points.
+
+```{r h4}
+# ──────────────────────────────────────────────────────────────────────
+# H4: CONFIDENCE EQUIVALENCE
+# ──────────────────────────────────────────────────────────────────────
+
+df_cat  <- df[df$interpretation == 2, ]
+df_cond <- df[df$interpretation == 1, ]
+
+cat("H4 samples: categorical n =", nrow(df_cat), ", conditional n =", nrow(df_cond), "\n\n")
+
+# ── Part (a): one-sided t-tests, mean > 4 ──
+cat("H4a: Confidence above midpoint (4)\n\n")
+
+# Categorical interpreters
+h4a_cat <- t.test(df_cat$confidence, mu = 4, alternative = "greater")
+cat("  Categorical: mean =", round(h4a_cat$estimate, 2),
+    ", t =", round(h4a_cat$statistic, 3),
+    ", p =", format.pval(h4a_cat$p.value, digits = 3), "\n")
+
+# Conditional interpreters
+h4a_cond <- t.test(df_cond$confidence, mu = 4, alternative = "greater")
+cat("  Conditional: mean =", round(h4a_cond$estimate, 2),
+    ", t =", round(h4a_cond$statistic, 3),
+    ", p =", format.pval(h4a_cond$p.value, digits = 3), "\n")
+
+# ── Part (b): TOST equivalence test ──
+# The TOST procedure consists of two one-sided t-tests:
+#   Test 1: H₀: δ ≤ -Δ  vs  H₁: δ > -Δ  (the difference is not too negative)
+#   Test 2: H₀: δ ≥ +Δ  vs  H₁: δ < +Δ  (the difference is not too positive)
+# Equivalence is concluded if BOTH tests are significant.
+
+cat("\nH4b: TOST equivalence test (bounds Δ = ±0.5)\n\n")
+
+delta <- 0.5  # equivalence bound in scale points
+group_diff <- mean(df_cat$confidence) - mean(df_cond$confidence)
+
+# Welch two-sample t-test infrastructure
+# We need the pooled SE of the difference
+tost_test <- t.test(df_cat$confidence, df_cond$confidence)
+se_diff <- abs(group_diff / tost_test$statistic)  # recover SE from t and difference
+df_tost <- tost_test$parameter
+
+# TOST Test 1: difference > -delta (lower bound)
+t1 <- (group_diff - (-delta)) / se_diff
+p1 <- pt(t1, df = df_tost, lower.tail = FALSE)  # one-sided, testing > -delta
+
+# TOST Test 2: difference < +delta (upper bound)
+t2 <- (group_diff - delta) / se_diff
+p2 <- pt(t2, df = df_tost, lower.tail = TRUE)   # one-sided, testing < +delta
+
+# The TOST p-value is the larger of the two
+tost_p <- max(p1, p2)
+
+cat("  Group difference (cat - cond):", round(group_diff, 2), "\n")
+cat("  SE of difference:", round(se_diff, 3), "\n")
+cat("  TOST Test 1 (diff > -0.5): t =", round(t1, 3), ", p =", format.pval(p1, digits = 3), "\n")
+cat("  TOST Test 2 (diff < +0.5): t =", round(t2, 3), ", p =", format.pval(p2, digits = 3), "\n")
+cat("  TOST p-value:", format.pval(tost_p, digits = 3), "\n")
+cat("  Equivalence concluded:", tost_p < 0.05, "\n")
+
+cat("\n═══ H4 RESULTS ═══\n")
+cat("  H4a: Both groups above midpoint —",
+    "Categorical:", h4a_cat$p.value < 0.05,
+    ", Conditional:", h4a_cond$p.value < 0.05, "\n")
+cat("  H4b: Equivalence (±0.5) concluded:", tost_p < 0.05, "\n")
+cat("  90% CI on difference: [", round(group_diff - qt(0.95, df_tost) * se_diff, 2),
+    ",", round(group_diff + qt(0.95, df_tost) * se_diff, 2), "]\n")
+cat("  NOTE: Conditional subgroup (n =", nrow(df_cond), ") is small;\n")
+cat("  this test is underpowered as acknowledged in the preregistration.\n")
+```
+
+
+# 6. H5 — Rewrite Concordance
+
+**Preregistered predictions:**
+- H5a (descriptive): Among categorical interpreters, some will produce conditional rewrites.
+- H5b (descriptive): Among conditional interpreters, concordance with the rewrite will be imperfect.
+- H5c (confirmatory): Concordance rate is higher among categorical than conditional interpreters.
+
+**Rewrites were classified computationally** (blind to forced-choice responses)
+using Claude Sonnet via the Anthropic API (Stage 3). The preregistration specifies
+"trained raters blind to forced-choice responses"; the computational classifier
+serves this function, with human spot-checking as a validation step.
+
+```{r h5}
+# ──────────────────────────────────────────────────────────────────────
+# H5: REWRITE CONCORDANCE
+# ──────────────────────────────────────────────────────────────────────
+
+# Concordance = the forced-choice interpretation matches the rewrite code.
+# For categorical FC: concordant if rewrite_code == "categorical"
+# For conditional FC: concordant if rewrite_code == "conditional"
+# Ambiguous rewrites are neither concordant nor discordant.
+
+df$concordant <- ifelse(
+  df$interp_label == "categorical" & df$rewrite_code == "categorical", TRUE,
+  ifelse(
+    df$interp_label == "conditional" & df$rewrite_code == "conditional", TRUE,
+    FALSE
+  )
+)
+
+# ── Cross-tabulation ──
+cat("Forced-Choice × Rewrite Classification:\n\n")
+cross_tab <- table(
+  "Forced-Choice" = df$interp_label,
+  "Rewrite Code" = df$rewrite_code
+)
+print(cross_tab)
+
+# ── H5a: Discordance among categorical interpreters ──
+cat("\n\n═══ H5a: Discordance among categorical interpreters ═══\n")
+
+df_fc_cat <- df[df$interpretation == 2, ]
+n_cat_total <- nrow(df_fc_cat)
+n_cat_conditional_rewrite <- sum(df_fc_cat$rewrite_code == "conditional")
+prop_discordant <- n_cat_conditional_rewrite / n_cat_total
+
+cat("  Categorical FC interpreters:", n_cat_total, "\n")
+cat("  Rewrites coded as conditional:", n_cat_conditional_rewrite, "\n")
+cat("  Proportion discordant:", round(prop_discordant, 3), "\n")
+
+# Bootstrap CI for the discordant proportion
+if (n_cat_conditional_rewrite > 0) {
+  boot_fn <- function(data, indices) {
+    d <- data[indices]
+    mean(d == "conditional")
+  }
+  set.seed(42)
+  boot_h5a <- boot(df_fc_cat$rewrite_code, boot_fn, R = 10000)
+  ci_h5a <- boot.ci(boot_h5a, type = "perc")
+  cat("  95% bootstrap CI: [", round(ci_h5a$percent[4], 3), ",",
+      round(ci_h5a$percent[5], 3), "]\n")
+} else {
+  # With 0 successes, use exact binomial CI instead
+  ci_h5a_exact <- binom.test(0, n_cat_total)$conf.int
+  cat("  95% exact binomial CI: [", round(ci_h5a_exact[1], 3), ",",
+      round(ci_h5a_exact[2], 3), "]\n")
+  cat("  (Exact CI used because proportion = 0)\n")
+}
+cat("  Pilot comparison: 28.4% discordant\n")
+
+
+# ── H5b: Concordance among conditional interpreters ──
+cat("\n═══ H5b: Concordance among conditional interpreters ═══\n")
+
+df_fc_cond <- df[df$interpretation == 1, ]
+n_cond_total <- nrow(df_fc_cond)
+n_cond_concordant <- sum(df_fc_cond$rewrite_code == "conditional")
+prop_concordant_cond <- n_cond_concordant / n_cond_total
+
+cat("  Conditional FC interpreters:", n_cond_total, "\n")
+cat("  Rewrites coded as conditional:", n_cond_concordant, "\n")
+cat("  Proportion concordant:", round(prop_concordant_cond, 3), "\n")
+
+if (n_cond_concordant > 0) {
+  boot_fn_cond <- function(data, indices) {
+    d <- data[indices]
+    mean(d == "conditional")
+  }
+  set.seed(42)
+  boot_h5b <- boot(df_fc_cond$rewrite_code, boot_fn_cond, R = 10000)
+  ci_h5b <- boot.ci(boot_h5b, type = "perc")
+  cat("  95% bootstrap CI: [", round(ci_h5b$percent[4], 3), ",",
+      round(ci_h5b$percent[5], 3), "]\n")
+} else {
+  ci_h5b_exact <- binom.test(0, n_cond_total)$conf.int
+  cat("  95% exact binomial CI: [", round(ci_h5b_exact[1], 3), ",",
+      round(ci_h5b_exact[2], 3), "]\n")
+  cat("  (Exact CI used because proportion = 0)\n")
+}
+cat("  Pilot comparison: 29.8% concordant\n")
+
+
+# ── H5c: Concordance comparison ──
+cat("\n═══ H5c: Concordance comparison ═══\n")
+
+# Concordance rates (including ambiguous in denominator)
+conc_cat  <- sum(df_fc_cat$rewrite_code == "categorical") / n_cat_total
+conc_cond <- n_cond_concordant / n_cond_total
+
+cat("  Concordance rate (categorical FC):", round(conc_cat, 3), "\n")
+cat("  Concordance rate (conditional FC):", round(conc_cond, 3), "\n")
+cat("  Difference:", round(conc_cat - conc_cond, 3), "\n\n")
+
+# Two-sample proportion test (one-sided)
+# P(concordance | categorical) > P(concordance | conditional)
+h5c_test <- prop.test(
+  x = c(sum(df_fc_cat$rewrite_code == "categorical"), n_cond_concordant),
+  n = c(n_cat_total, n_cond_total),
+  alternative = "greater"
+)
+
+cat("  Two-sample proportion test (one-sided):\n")
+cat("  χ² =", round(h5c_test$statistic, 3), "\n")
+cat("  p =", format.pval(h5c_test$p.value, digits = 3), "\n")
+cat("  Pilot comparison: 69.4% vs 29.8% (difference ≈ 40 pp)\n")
+```
+
+
+# 7. H6 — Bimodality of Perceived Importance
+
+**Preregistered prediction:** Responses on the perceived-importance question will be
+bimodal, clustering at "not crucial" and "absolutely essential" with few in the middle.
+
+**Test:** Fit Gaussian mixture models with 1 and 2 components using `mclust`.
+Lower BIC for the 2-component model constitutes evidence of bimodality. Also fit
+a 3-component model as a supplementary check.
+
+**CRITICAL LIMITATION:** Only 14 participants answered this question (conditional
+and neither interpreters only). This sample is far too small for reliable Gaussian
+mixture modeling. Results are reported for completeness but should not be interpreted
+as informative.
+
+```{r h6}
+# ──────────────────────────────────────────────────────────────────────
+# H6: BIMODALITY OF PERCEIVED IMPORTANCE
+# ──────────────────────────────────────────────────────────────────────
+
+df_istrue <- df[!is.na(df$istrue), ]
+
+cat("H6 sample: n =", nrow(df_istrue), "\n\n")
+
+cat("Perceived importance distribution:\n")
+istrue_tab <- table(df_istrue$istrue)
+istrue_labels <- c("1" = "Not crucial", "2" = "Somewhat important", "3" = "Absolutely essential")
+for (val in names(istrue_tab)) {
+  cat(sprintf("  %s (%s): %d (%.1f%%)\n",
+              val, istrue_labels[val], istrue_tab[val],
+              istrue_tab[val] / nrow(df_istrue) * 100))
+}
+
+if (nrow(df_istrue) >= 10) {
+  # Fit 1-, 2-, and 3-component Gaussian mixture models
+  # Adding small noise to discrete responses for mclust compatibility
+  set.seed(42)
+  istrue_jittered <- df_istrue$istrue + rnorm(nrow(df_istrue), sd = 0.1)
+  
+  mc1 <- Mclust(istrue_jittered, G = 1)
+  mc2 <- Mclust(istrue_jittered, G = 2)
+  mc3 <- Mclust(istrue_jittered, G = 3)
+  
+  cat("\nGaussian mixture model BIC values:\n")
+  cat("  1-component:", round(mc1$bic, 2), "\n")
+  cat("  2-component:", round(mc2$bic, 2), "\n")
+  cat("  3-component:", round(mc3$bic, 2), "\n")
+  
+  # BIC comparison (higher = better in mclust's convention)
+  best <- which.max(c(mc1$bic, mc2$bic, mc3$bic))
+  cat("  Best fitting model:", best, "component(s)\n")
+  
+  cat("\n═══ H6 RESULTS ═══\n")
+  cat("  2-component BIC better than 1-component:", mc2$bic > mc1$bic, "\n")
+  cat("  *** WARNING: n =", nrow(df_istrue), "is far too small for reliable ***\n")
+  cat("  *** mixture model estimation. This result is not informative. ***\n")
+} else {
+  cat("\n═══ H6 RESULTS ═══\n")
+  cat("  *** INSUFFICIENT DATA: n =", nrow(df_istrue), "***\n")
+  cat("  Cannot fit Gaussian mixture models with this sample size.\n")
+}
+```
+
+
+# 8. H7 — Removal Impact by Interpretation Group
+
+**Preregistered prediction:** Among categorical interpreters, mean removal-impact
+will fall significantly below the midpoint of 4. Among conditional interpreters,
+the mean will not differ significantly from 4.
+
+**Test:** Categorical: one-sided t-test, H₁: μ < 4. Conditional: two-sided t-test.
+A sentence-level random intercept is included if sample size permits; if singular,
+fall back to simple t-test.
+
+```{r h7}
+# ──────────────────────────────────────────────────────────────────────
+# H7: REMOVAL IMPACT BY INTERPRETATION GROUP
+# ──────────────────────────────────────────────────────────────────────
+
+# ── Categorical interpreters ──
+cat("═══ H7: Removal impact ═══\n\n")
+cat("Categorical interpreters (n =", nrow(df_cat), "):\n")
+cat("  Mean removal:", round(mean(df_cat$remove), 2), "\n")
+cat("  SD:", round(sd(df_cat$remove), 2), "\n\n")
+
+# Try mixed model first, fall back to t-test if singular
+h7_cat_mixed <- tryCatch({
+  m <- lmer(remove ~ 1 + (1 | sentence_id), data = df_cat)
+  # Check for singular fit
+  if (isSingular(m)) {
+    cat("  Mixed model: singular fit, falling back to t-test.\n")
+    NULL
+  } else {
+    cat("  Mixed model: converged with sentence random intercept.\n")
+    m
+  }
+}, error = function(e) {
+  cat("  Mixed model failed:", e$message, "\n  Falling back to t-test.\n")
+  NULL
+})
+
+if (!is.null(h7_cat_mixed)) {
+  # Use the mixed model estimate
+  h7_cat_est <- fixef(h7_cat_mixed)["(Intercept)"]
+  h7_cat_se <- sqrt(vcov(h7_cat_mixed)["(Intercept)", "(Intercept)"])
+  h7_cat_t <- (h7_cat_est - 4) / h7_cat_se
+  # Approximate df using Satterthwaite or just use large-sample z
+  h7_cat_p <- pnorm(h7_cat_t)  # one-sided, testing < 4
+  cat("  Intercept:", round(h7_cat_est, 2), ", SE:", round(h7_cat_se, 2), "\n")
+  cat("  Test against midpoint (4): z =", round(h7_cat_t, 3), ", p =", format.pval(h7_cat_p, digits = 3), "\n")
+} else {
+  # Simple one-sided t-test
+  h7_cat_t <- t.test(df_cat$remove, mu = 4, alternative = "less")
+  cat("  t =", round(h7_cat_t$statistic, 3), "\n")
+  cat("  df =", round(h7_cat_t$parameter, 1), "\n")
+  cat("  p =", format.pval(h7_cat_t$p.value, digits = 3), "\n")
+}
+
+# ── Conditional interpreters ──
+cat("\n\nConditional interpreters (n =", nrow(df_cond), "):\n")
+cat("  Mean removal:", round(mean(df_cond$remove), 2), "\n")
+cat("  SD:", round(sd(df_cond$remove), 2), "\n\n")
+
+# With n = 9, a mixed model with sentence random intercepts likely won't converge.
+# Try it, but expect to fall back to t-test.
+h7_cond_mixed <- tryCatch({
+  m <- lmer(remove ~ 1 + (1 | sentence_id), data = df_cond)
+  if (isSingular(m)) {
+    cat("  Mixed model: singular fit, falling back to t-test.\n")
+    NULL
+  } else {
+    cat("  Mixed model: converged with sentence random intercept.\n")
+    m
+  }
+}, error = function(e) {
+  cat("  Mixed model failed:", e$message, "\n  Falling back to t-test.\n")
+  NULL
+})
+
+if (!is.null(h7_cond_mixed)) {
+  h7_cond_est <- fixef(h7_cond_mixed)["(Intercept)"]
+  h7_cond_se <- sqrt(vcov(h7_cond_mixed)["(Intercept)", "(Intercept)"])
+  h7_cond_t <- (h7_cond_est - 4) / h7_cond_se
+  h7_cond_p <- 2 * pnorm(-abs(h7_cond_t))  # two-sided
+  cat("  Intercept:", round(h7_cond_est, 2), ", SE:", round(h7_cond_se, 2), "\n")
+  cat("  Test against midpoint (4): z =", round(h7_cond_t, 3), ", p =", format.pval(h7_cond_p, digits = 3), "\n")
+} else {
+  h7_cond_t <- t.test(df_cond$remove, mu = 4, alternative = "two.sided")
+  cat("  t =", round(h7_cond_t$statistic, 3), "\n")
+  cat("  df =", round(h7_cond_t$parameter, 1), "\n")
+  cat("  p =", format.pval(h7_cond_t$p.value, digits = 3), "\n")
+}
+
+cat("\n═══ H7 SUMMARY ═══\n")
+cat("  Categorical mean removal:", round(mean(df_cat$remove), 2), "(predicted < 4)\n")
+cat("  Conditional mean removal:", round(mean(df_cond$remove), 2), "(predicted ≈ 4)\n")
+```
+
+
+# 9. Summary of All Hypotheses
+
+```{r summary-table}
+# ──────────────────────────────────────────────────────────────────────
+# COMPREHENSIVE SUMMARY
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══════════════════════════════════════════════════════════════════\n")
+cat("  SA_E1A HYPOTHESIS TESTING — COMPLETE SUMMARY\n")
+cat("  Analytic N = ", nrow(df), "\n")
+cat("═══════════════════════════════════════════════════════════════════\n\n")
+
+cat("  H1  Categorical bias:     ", round(mean(df_binary$interp_binary) * 100, 1),
+    "% categorical (pilot: 84.3%)\n")
+cat("  H2  Comma sensitivity:    3v1 mean =", round(mean(df$comma_3v1), 2),
+    "vs 3v2 =", round(mean(df$comma_3v2), 2),
+    ", 2v1 =", round(mean(df$comma_2v1), 2), "\n")
+cat("  H3  Paradox:              n = 6 'essential' raters, mean remove =",
+    ifelse(nrow(df_essential) > 0, round(mean(df_essential$remove), 2), "N/A"),
+    " (UNDERPOWERED)\n")
+cat("  H4  Confidence equiv:     Cat =", round(mean(df_cat$confidence), 2),
+    ", Cond =", round(mean(df_cond$confidence), 2), "\n")
+cat("  H5a Discordance (cat FC): ", n_cat_conditional_rewrite, "/",
+    n_cat_total, "conditional rewrites\n")
+cat("  H5b Concordance (cond FC):", n_cond_concordant, "/",
+    n_cond_total, "conditional rewrites\n")
+cat("  H5c Concordance diff:     ", round(conc_cat, 3), "vs",
+    round(conc_cond, 3), "\n")
+cat("  H6  Bimodality:           n =", sum(!is.na(df$istrue)), "(UNDERPOWERED)\n")
+cat("  H7  Removal by group:     Cat =", round(mean(df_cat$remove), 2),
+    ", Cond =", round(mean(df_cond$remove), 2), "\n")
+
+cat("\n  Key limitation: istrue only collected for conditional/neither\n")
+cat("  interpreters (n = 14), severely limiting H3 and H6.\n")
+cat("═══════════════════════════════════════════════════════════════════\n")
+```
+
+
+# 10. Additional Measures: "And" Insertion and Distinguish
+
+These measures were collected from all participants but are not tied to specific
+preregistered hypotheses. They are reported descriptively and broken down by
+interpretation group.
+
+## 10.1 "And" Insertion Impact
+
+Participants saw the original sentence alongside a version with "and" inserted
+before the operative clause (e.g., "...being necessary for X, **and** the right
+of people to Y, must not be Z"). They rated the difference on the same 1-7
+scale as the removal question (1 = same implications, 7 = completely different).
+
+```{r and-insertion}
+# ──────────────────────────────────────────────────────────────────────
+# "AND" INSERTION IMPACT
+# ──────────────────────────────────────────────────────────────────────
+
+df$and_impact <- as.integer(df$and)
+
+cat("═══ 'And' Insertion Impact ═══\n\n")
+
+# Overall descriptives
+cat("Overall:\n")
+cat("  Mean:", round(mean(df$and_impact), 2), "\n")
+cat("  SD:", round(sd(df$and_impact), 2), "\n")
+cat("  Median:", median(df$and_impact), "\n")
+cat("  Distribution:\n")
+and_tab <- table(df$and_impact)
+for (val in names(and_tab)) {
+  cat(sprintf("    %s: %d (%.1f%%)\n", val, and_tab[val],
+              and_tab[val] / length(df$and_impact) * 100))
+}
+
+# Test against midpoint (4): is insertion perceived as changing meaning?
+and_overall_t <- t.test(df$and_impact, mu = 4)
+cat("\n  Test against midpoint (4):\n")
+cat("    t =", round(and_overall_t$statistic, 3),
+    ", df =", round(and_overall_t$parameter, 1),
+    ", p =", format.pval(and_overall_t$p.value, digits = 3), "\n")
+cat("    Mean is", ifelse(mean(df$and_impact) < 4, "below", "above"), "midpoint\n")
+
+# By interpretation group
+cat("\nBy interpretation group:\n")
+for (grp in c("categorical", "conditional", "neither")) {
+  sub <- df[df$interp_label == grp, ]
+  if (nrow(sub) > 0) {
+    cat(sprintf("  %s (n=%d): M=%.2f, SD=%.2f\n",
+                grp, nrow(sub), mean(sub$and_impact), sd(sub$and_impact)))
+  }
+}
+
+# Compare categorical vs conditional (if enough data)
+if (sum(df$interpretation == 1) >= 3) {
+  and_group_t <- t.test(df$and_impact[df$interpretation == 2],
+                         df$and_impact[df$interpretation == 1])
+  cat("\n  Cat vs. Cond t-test: t =", round(and_group_t$statistic, 3),
+      ", p =", format.pval(and_group_t$p.value, digits = 3), "\n")
+}
+```
+
+## 10.2 Distinguish Question
+
+Participants chose which phrase best replaces "being necessary for" in the
+sentence. Options: (1) "for the purpose of," (2) "because," or (3) "neither."
+This captures whether participants read the prefatory clause as expressing
+a purpose relationship or a causal/factual one.
+
+```{r distinguish}
+# ──────────────────────────────────────────────────────────────────────
+# DISTINGUISH QUESTION
+# ──────────────────────────────────────────────────────────────────────
+
+df$distinguish <- as.integer(df$distinguish)
+
+dist_labels <- c("1" = "For the purpose of",
+                 "2" = "Because",
+                 "3" = "Neither")
+
+cat("═══ Distinguish Question ═══\n\n")
+
+# Overall distribution
+cat("Overall distribution:\n")
+dist_tab <- table(df$distinguish)
+for (val in names(dist_tab)) {
+  cat(sprintf("  %s (%s): %d (%.1f%%)\n",
+              val, dist_labels[val], dist_tab[val],
+              dist_tab[val] / nrow(df) * 100))
+}
+
+# By interpretation group
+cat("\nBy interpretation group:\n")
+for (grp in c("categorical", "conditional", "neither")) {
+  sub <- df[df$interp_label == grp, ]
+  if (nrow(sub) > 0) {
+    cat(sprintf("\n  %s (n=%d):\n", grp, nrow(sub)))
+    grp_tab <- table(sub$distinguish)
+    for (val in names(grp_tab)) {
+      cat(sprintf("    %s (%s): %d (%.1f%%)\n",
+                  val, dist_labels[val], grp_tab[val],
+                  grp_tab[val] / nrow(sub) * 100))
+    }
+  }
+}
+
+# Chi-square test: does distinguish choice differ by interpretation group?
+# Use only categorical vs. conditional (exclude "neither" group due to small n)
+dist_cross <- table(
+  df$interp_label[df$interpretation %in% c(1, 2)],
+  df$distinguish[df$interpretation %in% c(1, 2)]
+)
+cat("\n\nCross-tabulation (categorical vs conditional only):\n")
+print(dist_cross)
+
+# Fisher's exact test (some cells may be small)
+dist_fisher <- fisher.test(dist_cross)
+cat("\n  Fisher's exact test: p =", format.pval(dist_fisher$p.value, digits = 3), "\n")
+```
+
+## 10.3 Comma Insertion (AddCommas)
+
+Participants saw their sentence with all commas removed and were asked to
+add commas wherever they thought they should go. The original sentences have
+three commas at canonical positions:
+
+- **Position 1:** After the subject, before "being necessary"
+- **Position 2:** After the purpose clause, before "the right of"
+- **Position 3:** After the action phrase, before "must not be" / "shall not be"
+
+We detect each position with regex and classify each response by its
+comma placement pattern.
+
+```{r addcommas-positions}
+# ──────────────────────────────────────────────────────────────────────
+# COMMA INSERTION ANALYSIS
+#
+# Participants copied the sentence (stripped of commas) and added
+# commas where they thought they belonged. We check whether commas
+# appear at each of the three canonical positions.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Comma Insertion (AddCommas) ═══\n\n")
+
+# Detect comma at each canonical position
+df$comma_p1 <- grepl(",\\s*being\\s+necessary", df$addcommas, ignore.case = TRUE)
+df$comma_p2 <- grepl(",\\s*the right of", df$addcommas, ignore.case = TRUE)
+df$comma_p3 <- grepl(",\\s*(must|shall)\\s+not", df$addcommas, ignore.case = TRUE)
+
+# Total commas placed
+df$n_commas_placed <- nchar(gsub("[^,]", "", df$addcommas))
+
+# Pattern string: e.g., "110" means positions 1 and 2 have commas, 3 does not
+df$comma_pattern <- paste0(
+  ifelse(df$comma_p1, "1", "0"),
+  ifelse(df$comma_p2, "1", "0"),
+  ifelse(df$comma_p3, "1", "0")
+)
+
+# ── How many commas did participants place? ──
+cat("Total commas placed:\n")
+nc_tab <- table(df$n_commas_placed)
+for (val in names(nc_tab)) {
+  cat(sprintf("  %s commas: %d (%.1f%%)\n", val, nc_tab[val],
+              nc_tab[val] / nrow(df) * 100))
+}
+cat(sprintf("\n  Mean: %.2f, SD: %.2f\n", mean(df$n_commas_placed),
+            sd(df$n_commas_placed)))
+
+# ── Position-by-position rates ──
+cat("\nComma placement at each canonical position:\n")
+cat(sprintf("  Position 1 (before 'being necessary'):  %d/100 (%d%%)\n",
+            sum(df$comma_p1), sum(df$comma_p1)))
+cat(sprintf("  Position 2 (before 'the right of'):     %d/100 (%d%%)\n",
+            sum(df$comma_p2), sum(df$comma_p2)))
+cat(sprintf("  Position 3 (before 'must/shall not'):   %d/100 (%d%%)\n",
+            sum(df$comma_p3), sum(df$comma_p3)))
+
+# ── Pattern frequencies ──
+cat("\nPlacement patterns (1 = comma present, 0 = absent):\n")
+cat("  Pattern  P1  P2  P3  Count  Description\n")
+pat_tab <- sort(table(df$comma_pattern), decreasing = TRUE)
+pat_desc <- c(
+  "111" = "All three (matches original)",
+  "110" = "Subject + purpose (dropped action comma)",
+  "010" = "Purpose boundary only",
+  "011" = "Purpose + action (dropped subject comma)",
+  "101" = "Subject + action (dropped purpose comma)",
+  "100" = "Subject only",
+  "001" = "Action only",
+  "000" = "No commas at canonical positions"
+)
+for (pat in names(pat_tab)) {
+  desc <- ifelse(pat %in% names(pat_desc), pat_desc[pat], "Other")
+  cat(sprintf("  %s     %s   %s   %s   %3d    %s\n",
+              pat, substr(pat,1,1), substr(pat,2,2), substr(pat,3,3),
+              pat_tab[pat], desc))
+}
+```
+
+```{r addcommas-by-group}
+# ──────────────────────────────────────────────────────────────────────
+# COMMA PLACEMENT BY INTERPRETATION GROUP
+#
+# Does comma placement pattern differ between categorical and
+# conditional interpreters? If conditional interpreters are more
+# sensitive to the clause boundaries, they might place more commas
+# or place them at different positions.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("\n═══ Comma Placement by Interpretation Group ═══\n\n")
+
+# Mean commas by group
+cat("Mean commas placed:\n")
+for (grp in c("categorical", "conditional", "neither")) {
+  sub <- df[df$interp_label == grp, ]
+  if (nrow(sub) > 0) {
+    cat(sprintf("  %s (n=%d): M=%.2f, SD=%.2f\n",
+                grp, nrow(sub), mean(sub$n_commas_placed),
+                sd(sub$n_commas_placed)))
+  }
+}
+
+# Position rates by group
+cat("\nPosition rates by group (% placing comma at each position):\n")
+cat("  Group           P1 (subject)  P2 (purpose)  P3 (action)\n")
+for (grp in c("categorical", "conditional", "neither")) {
+  sub <- df[df$interp_label == grp, ]
+  if (nrow(sub) > 0) {
+    cat(sprintf("  %-14s  %5.1f%%        %5.1f%%        %5.1f%%\n",
+                grp,
+                mean(sub$comma_p1) * 100,
+                mean(sub$comma_p2) * 100,
+                mean(sub$comma_p3) * 100))
+  }
+}
+
+# Pattern cross-tab (categorical vs conditional only)
+cat("\nPattern × Interpretation (categorical vs conditional):\n")
+pat_cross <- table(
+  df$interp_label[df$interpretation %in% c(1, 2)],
+  df$comma_pattern[df$interpretation %in% c(1, 2)]
+)
+print(pat_cross)
+
+# Did they recover the original 3-comma structure?
+cat("\nProportion recovering original 3-comma structure (pattern 111):\n")
+for (grp in c("categorical", "conditional", "neither")) {
+  sub <- df[df$interp_label == grp, ]
+  if (nrow(sub) > 0) {
+    pct <- mean(sub$comma_pattern == "111") * 100
+    cat(sprintf("  %s: %.1f%% (%d/%d)\n", grp, pct,
+                sum(sub$comma_pattern == "111"), nrow(sub)))
+  }
+}
+```
+
+```{r addcommas-position3}
+# ──────────────────────────────────────────────────────────────────────
+# POSITION 3 IS THE MOST VARIABLE
+#
+# Position 3 (the comma before "must not be") is the most contested,
+# with only 50% of participants placing it. This is the joint between
+# the operative clause's content (the right to do X) and its verb
+# (must not be restricted). Dropping this comma fuses the two into
+# a single clause. Does this relate to interpretation?
+# ──────────────────────────────────────────────────────────────────────
+
+cat("\n═══ Position 3 and Interpretation ═══\n\n")
+
+# Is Position 3 placement associated with interpretation?
+# Among binary interpreters only
+df_p3 <- df[df$interpretation %in% c(1, 2), ]
+
+cat("Position 3 comma × Interpretation:\n")
+p3_cross <- table(
+  "Interpretation" = df_p3$interp_label,
+  "Comma at P3" = df_p3$comma_p3
+)
+print(p3_cross)
+
+# Fisher's exact test
+p3_fisher <- fisher.test(p3_cross)
+cat("\n  Fisher's exact test: p =", format.pval(p3_fisher$p.value, digits = 3), "\n")
+
+# Position 3 and removal impact: do people who drop the comma
+# also perceive removal of the prefatory clause as less impactful?
+cat("\nRemoval impact by Position 3 comma placement:\n")
+cat(sprintf("  With P3 comma (n=%d):    M=%.2f, SD=%.2f\n",
+            sum(df$comma_p3), mean(df$remove[df$comma_p3]),
+            sd(df$remove[df$comma_p3])))
+cat(sprintf("  Without P3 comma (n=%d): M=%.2f, SD=%.2f\n",
+            sum(!df$comma_p3), mean(df$remove[!df$comma_p3]),
+            sd(df$remove[!df$comma_p3])))
+p3_rem_t <- t.test(df$remove[df$comma_p3], df$remove[!df$comma_p3])
+cat(sprintf("  t = %.3f, p = %s\n",
+            p3_rem_t$statistic, format.pval(p3_rem_t$p.value, digits = 3)))
+```
+
+
+# 11. Demographics
+
+Descriptive statistics for all demographic variables collected. These are
+reported for sample characterization; none were preregistered as predictors.
+
+```{r demographics}
+# ──────────────────────────────────────────────────────────────────────
+# DEMOGRAPHICS
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Demographics ═══\n\n")
+
+# ── Gender ──
+# 1 = male, 2 = female, 3 = other/non-binary
+gender_labels <- c("1" = "Male", "2" = "Female", "3" = "Other/Non-binary")
+cat("Gender:\n")
+gen_tab <- table(df$gender)
+for (val in names(gen_tab)) {
+  cat(sprintf("  %s: %d (%.1f%%)\n",
+              gender_labels[val], gen_tab[val],
+              gen_tab[val] / nrow(df) * 100))
+}
+
+# ── Age ──
+df$age_num <- as.numeric(df$age)
+cat("\nAge:\n")
+cat("  Mean:", round(mean(df$age_num, na.rm = TRUE), 1), "\n")
+cat("  SD:", round(sd(df$age_num, na.rm = TRUE), 1), "\n")
+cat("  Range:", min(df$age_num, na.rm = TRUE), "-", max(df$age_num, na.rm = TRUE), "\n")
+cat("  Median:", median(df$age_num, na.rm = TRUE), "\n")
+
+# ── Race ──
+# 1=White, 2=Black, 3=Asian, 4=Hispanic/Latino, 5=Native American,
+# 6=Other, multi-select separated by semicolons
+cat("\nRace/Ethnicity (including multi-select):\n")
+race_tab <- table(df$race)
+race_labels <- c("1" = "White", "2" = "Black", "3" = "Asian",
+                 "4" = "Hispanic/Latino", "5" = "Native American",
+                 "6" = "Other")
+for (val in names(sort(race_tab, decreasing = TRUE))) {
+  # Try to decode multi-select entries
+  decoded <- paste(sapply(strsplit(val, ";")[[1]], function(x) {
+    ifelse(x %in% names(race_labels), race_labels[x], x)
+  }), collapse = " + ")
+  cat(sprintf("  %s: %d (%.1f%%)\n",
+              decoded, race_tab[val], race_tab[val] / nrow(df) * 100))
+}
+```
+
+
+# 12. Gun Control Attitudes (Exploratory)
+
+Participants answered: "In general, do you think gun laws should be made more
+strict, less strict, or kept as they are now?" on a 5-point scale:
+1 = Much more strict, 2 = Somewhat more strict, 3 = Kept as they are now,
+4 = Somewhat less strict, 5 = Much less strict.
+
+This analysis is entirely exploratory. The key question is whether gun control
+attitudes predict interpretation, but given the 90.5% categorical rate, there
+is very little variance in the outcome to explain.
+
+## 12.1 Gun Control Descriptives
+
+```{r gun-descriptives}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL ATTITUDES — DESCRIPTIVES
+# ──────────────────────────────────────────────────────────────────────
+
+df$gun_control <- as.integer(df$gun_control)
+
+gun_labels <- c("1" = "Much more strict",
+                "2" = "Somewhat more strict",
+                "3" = "Kept as they are",
+                "4" = "Somewhat less strict",
+                "5" = "Much less strict")
+
+cat("═══ Gun Control Attitudes ═══\n\n")
+
+cat("Distribution:\n")
+gun_tab <- table(df$gun_control)
+for (val in names(gun_tab)) {
+  cat(sprintf("  %s (%s): %d (%.1f%%)\n",
+              val, gun_labels[val], gun_tab[val],
+              gun_tab[val] / nrow(df) * 100))
+}
+cat(sprintf("\n  Mean: %.2f, SD: %.2f, Median: %d\n",
+            mean(df$gun_control), sd(df$gun_control), median(df$gun_control)))
+cat("  (Lower values = more pro-restriction)\n")
+```
+
+## 12.2 Gun Control and Interpretation
+
+```{r gun-interpretation}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL × INTERPRETATION
+#
+# Does gun control attitude predict whether a participant chooses
+# categorical vs. conditional? Given the 90.5% categorical rate,
+# we expect little variance to work with. We report both a logistic
+# regression (treating gun_control as continuous) and a descriptive
+# breakdown.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Gun Control × Interpretation ═══\n\n")
+
+# Descriptive: mean gun control by interpretation group
+cat("Mean gun control attitude by interpretation group:\n")
+for (grp in c("categorical", "conditional", "neither")) {
+  sub <- df[df$interp_label == grp, ]
+  if (nrow(sub) > 0) {
+    cat(sprintf("  %s (n=%d): M=%.2f, SD=%.2f\n",
+                grp, nrow(sub), mean(sub$gun_control), sd(sub$gun_control)))
+  }
+}
+
+# Full distribution cross-tab
+cat("\nInterpretation × Gun control cross-tabulation:\n")
+cross_gun <- table(df$interp_label, df$gun_control)
+print(cross_gun)
+
+# Logistic regression: gun_control predicting binary interpretation
+# (excluding "neither" responses)
+df_binary_gun <- df[!is.na(df$interp_binary), ]
+
+# Simple logistic regression (no random effects, since gun_control is
+# a participant-level predictor and we have one observation per participant)
+gun_logit <- glm(interp_binary ~ gun_control, data = df_binary_gun,
+                  family = binomial)
+cat("\n\nLogistic regression: interpretation ~ gun_control\n")
+print(summary(gun_logit))
+
+gun_coef <- coef(gun_logit)["gun_control"]
+gun_se <- summary(gun_logit)$coefficients["gun_control", "Std. Error"]
+gun_p <- summary(gun_logit)$coefficients["gun_control", "Pr(>|z|)"]
+gun_or <- exp(gun_coef)
+
+cat(sprintf("\n  Gun control coefficient: %.3f (SE = %.3f, p = %s)\n",
+            gun_coef, gun_se, format.pval(gun_p, digits = 3)))
+cat(sprintf("  Odds ratio: %.3f\n", gun_or))
+cat("  (OR > 1 means more pro-gun = more likely categorical;\n")
+cat("   OR < 1 means more pro-gun = less likely categorical)\n")
+```
+
+## 12.3 Gun Control and Confidence
+
+```{r gun-confidence}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL × CONFIDENCE
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Gun Control × Confidence ═══\n\n")
+
+gun_conf_cor <- cor.test(df$gun_control, df$confidence)
+cat("  Pearson r =", round(gun_conf_cor$estimate, 3), "\n")
+cat("  p =", format.pval(gun_conf_cor$p.value, digits = 3), "\n")
+cat("  95% CI: [", round(gun_conf_cor$conf.int[1], 3), ",",
+    round(gun_conf_cor$conf.int[2], 3), "]\n")
+```
+
+## 12.4 Gun Control and Removal Impact
+
+```{r gun-removal}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL × REMOVAL IMPACT
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Gun Control × Removal Impact ═══\n\n")
+
+gun_rem_cor <- cor.test(df$gun_control, df$remove)
+cat("  Pearson r =", round(gun_rem_cor$estimate, 3), "\n")
+cat("  p =", format.pval(gun_rem_cor$p.value, digits = 3), "\n")
+cat("  95% CI: [", round(gun_rem_cor$conf.int[1], 3), ",",
+    round(gun_rem_cor$conf.int[2], 3), "]\n")
+```
+
+## 12.5 Gun Control and Rewrite Concordance
+
+```{r gun-rewrite}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL × REWRITE CODE
+#
+# Does gun control attitude relate to what kind of rewrite people
+# produce? With zero conditional rewrites, this is really asking
+# whether gun attitudes predict categorical vs. ambiguous rewrites.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Gun Control × Rewrite Code ═══\n\n")
+
+cat("Mean gun control by rewrite classification:\n")
+for (code in c("categorical", "ambiguous", "conditional")) {
+  sub <- df[df$rewrite_code == code, ]
+  if (nrow(sub) > 0) {
+    cat(sprintf("  %s (n=%d): M=%.2f, SD=%.2f\n",
+                code, nrow(sub), mean(sub$gun_control), sd(sub$gun_control)))
+  }
+}
+```
+
+## 12.6 Gun Control and "And" Insertion Impact
+
+```{r gun-and}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL × "AND" INSERTION IMPACT
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Gun Control × 'And' Insertion Impact ═══\n\n")
+
+gun_and_cor <- cor.test(df$gun_control, df$and_impact)
+cat("  Pearson r =", round(gun_and_cor$estimate, 3), "\n")
+cat("  p =", format.pval(gun_and_cor$p.value, digits = 3), "\n")
+cat("  95% CI: [", round(gun_and_cor$conf.int[1], 3), ",",
+    round(gun_and_cor$conf.int[2], 3), "]\n")
+```
+
+## 12.7 Gun Control and Distinguish
+
+```{r gun-distinguish}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL × DISTINGUISH
+#
+# Does gun control attitude relate to whether participants interpret
+# "being necessary" as purposive ("for the purpose of") or causal
+# ("because")?
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Gun Control × Distinguish ═══\n\n")
+
+cat("Mean gun control by distinguish choice:\n")
+for (val in c(1, 2, 3)) {
+  sub <- df[df$distinguish == val, ]
+  if (nrow(sub) > 0) {
+    label <- c("1" = "For the purpose of", "2" = "Because", "3" = "Neither")[as.character(val)]
+    cat(sprintf("  %s (n=%d): M=%.2f, SD=%.2f\n",
+                label, nrow(sub), mean(sub$gun_control), sd(sub$gun_control)))
+  }
+}
+
+# One-way ANOVA
+gun_dist_aov <- summary(aov(gun_control ~ factor(distinguish), data = df))
+cat(sprintf("\n  One-way ANOVA: F = %.3f, p = %s\n",
+            gun_dist_aov[[1]]["factor(distinguish)", "F value"],
+            format.pval(gun_dist_aov[[1]]["factor(distinguish)", "Pr(>F)"], digits = 3)))
+```
+
+## 12.8 Gun Control and Comma Placement
+
+```{r gun-commas-placed}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL × COMMA PLACEMENT
+#
+# Do gun attitudes predict how many commas participants place, or
+# whether they place a comma at the contested Position 3?
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Gun Control × Comma Placement ═══\n\n")
+
+# Number of commas placed
+gun_ncomma_cor <- cor.test(df$gun_control, df$n_commas_placed)
+cat("Gun control × number of commas placed:\n")
+cat("  Pearson r =", round(gun_ncomma_cor$estimate, 3),
+    ", p =", format.pval(gun_ncomma_cor$p.value, digits = 3), "\n")
+
+# Position 3 specifically
+cat("\nGun control × Position 3 placement:\n")
+cat(sprintf("  With P3 comma (n=%d): M gun = %.2f\n",
+            sum(df$comma_p3), mean(df$gun_control[df$comma_p3])))
+cat(sprintf("  Without P3 comma (n=%d): M gun = %.2f\n",
+            sum(!df$comma_p3), mean(df$gun_control[!df$comma_p3])))
+gun_p3_t <- t.test(df$gun_control[df$comma_p3], df$gun_control[!df$comma_p3])
+cat(sprintf("  t = %.3f, p = %s\n",
+            gun_p3_t$statistic, format.pval(gun_p3_t$p.value, digits = 3)))
+```
+
+## 12.9 Gun Control and Comma Sensitivity Ratings
+
+```{r gun-comma-ratings}
+# ──────────────────────────────────────────────────────────────────────
+# GUN CONTROL × COMMA SENSITIVITY RATINGS (the H2 measures)
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Gun Control × Comma Sensitivity Ratings ═══\n\n")
+
+for (comp in c("comma_3v2", "comma_3v1", "comma_2v1")) {
+  r <- cor.test(df$gun_control, df[[comp]])
+  cat(sprintf("  %s: r = %.3f, p = %s\n",
+              comp, r$estimate, format.pval(r$p.value, digits = 3)))
+}
+```
+
+
+# 13. Age and Gender as Predictors (Exploratory)
+
+```{r age-gender}
+# ──────────────────────────────────────────────────────────────────────
+# AGE AND GENDER × ALL DVs
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══ Age × Interpretation ═══\n\n")
+
+# Age by interpretation group
+for (grp in c("categorical", "conditional", "neither")) {
+  sub <- df[df$interp_label == grp, ]
+  if (nrow(sub) > 0) {
+    cat(sprintf("  %s (n=%d): M=%.1f, SD=%.1f, range=[%d, %d]\n",
+                grp, nrow(sub),
+                mean(sub$age_num, na.rm = TRUE),
+                sd(sub$age_num, na.rm = TRUE),
+                min(sub$age_num, na.rm = TRUE),
+                max(sub$age_num, na.rm = TRUE)))
+  }
+}
+
+# Logistic regression: age predicting interpretation (binary)
+age_logit <- glm(interp_binary ~ age_num, data = df_binary_gun, family = binomial)
+age_p <- summary(age_logit)$coefficients["age_num", "Pr(>|z|)"]
+cat(sprintf("\n  Logistic regression (interpretation ~ age): p = %s\n",
+            format.pval(age_p, digits = 3)))
+
+# Age × other DVs
+cat("\n═══ Age × Other DVs ═══\n\n")
+for (dv_name in c("confidence", "remove", "and_impact", "n_commas_placed")) {
+  r <- cor.test(df$age_num, df[[dv_name]], use = "complete.obs")
+  cat(sprintf("  Age × %s: r = %.3f, p = %s\n",
+              dv_name, r$estimate, format.pval(r$p.value, digits = 3)))
+}
+
+# Age × comma sensitivity
+cat("\n")
+for (comp in c("comma_3v2", "comma_3v1", "comma_2v1")) {
+  r <- cor.test(df$age_num, df[[comp]], use = "complete.obs")
+  cat(sprintf("  Age × %s: r = %.3f, p = %s\n",
+              comp, r$estimate, format.pval(r$p.value, digits = 3)))
+}
+
+cat("\n\n═══ Gender × Interpretation ═══\n\n")
+
+# Gender by interpretation group
+df$gender_label <- ifelse(df$gender == "1", "Male",
+                   ifelse(df$gender == "2", "Female", "Other"))
+
+gender_interp <- table(df$gender_label, df$interp_label)
+cat("Gender × Interpretation:\n")
+print(gender_interp)
+
+# Proportions within each gender
+cat("\nProportion categorical by gender:\n")
+for (g in c("Male", "Female")) {
+  sub <- df[df$gender_label == g, ]
+  pct_cat <- mean(sub$interpretation == 2) * 100
+  cat(sprintf("  %s (n=%d): %.1f%% categorical\n", g, nrow(sub), pct_cat))
+}
+
+# Fisher's exact test (male vs female only, exclude other due to n=1)
+gender_binary <- df[df$gender_label %in% c("Male", "Female") &
+                     df$interpretation %in% c(1, 2), ]
+gender_fisher <- fisher.test(table(gender_binary$gender_label,
+                                    gender_binary$interp_label))
+cat(sprintf("\n  Fisher's exact (Male vs Female, cat vs cond): p = %s\n",
+            format.pval(gender_fisher$p.value, digits = 3)))
+
+# Gender × other DVs
+cat("\n═══ Gender × Other DVs (Male vs Female) ═══\n\n")
+df_mf <- df[df$gender_label %in% c("Male", "Female"), ]
+for (dv_name in c("confidence", "remove", "and_impact", "n_commas_placed")) {
+  tt <- t.test(df_mf[[dv_name]][df_mf$gender_label == "Male"],
+               df_mf[[dv_name]][df_mf$gender_label == "Female"])
+  cat(sprintf("  %s: Male M=%.2f, Female M=%.2f, t=%.3f, p=%s\n",
+              dv_name,
+              mean(df_mf[[dv_name]][df_mf$gender_label == "Male"]),
+              mean(df_mf[[dv_name]][df_mf$gender_label == "Female"]),
+              tt$statistic, format.pval(tt$p.value, digits = 3)))
+}
+```
+
+
+# 14. Comprehensive Summary (Updated)
+
+```{r summary-updated}
+# ──────────────────────────────────────────────────────────────────────
+# FULL SUMMARY INCLUDING EXPLORATORY ANALYSES
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══════════════════════════════════════════════════════════════════\n")
+cat("  SA_E1A COMPLETE ANALYSIS SUMMARY\n")
+cat("  Analytic N = ", nrow(df), "\n")
+cat("═══════════════════════════════════════════════════════════════════\n\n")
+
+cat("PREREGISTERED HYPOTHESES\n")
+cat("  H1  Categorical bias:      ", round(mean(df_binary$interp_binary) * 100, 1),
+    "% categorical\n")
+cat("  H2  Comma sensitivity:     3v1 =", round(mean(df$comma_3v1), 2),
+    ", 3v2 =", round(mean(df$comma_3v2), 2),
+    ", 2v1 =", round(mean(df$comma_2v1), 2), "\n")
+cat("  H3  Paradox:               n = 6, UNDERPOWERED\n")
+cat("  H4  Confidence:            Cat =", round(mean(df_cat$confidence), 2),
+    ", Cond =", round(mean(df_cond$confidence), 2),
+    "; equivalence NOT established\n")
+cat("  H5  Concordance:           0 conditional rewrites (from anyone)\n")
+cat("  H6  Bimodality:            n = 14, UNDERPOWERED\n")
+cat("  H7  Removal:               Cat =", round(mean(df_cat$remove), 2),
+    " (< midpoint), Cond =", round(mean(df_cond$remove), 2), "\n")
+
+cat("\nADDITIONAL MEASURES\n")
+cat("  And insertion:             M =", round(mean(df$and_impact), 2),
+    " (below midpoint)\n")
+cat("  Distinguish:               ",
+    round(table(df$distinguish)["2"] / nrow(df) * 100, 1),
+    "% chose 'because'\n")
+cat("  Comma insertion:           ",
+    sum(df$comma_pattern == "111"), "% recovered all 3 commas;",
+    "P1=", paste0(sum(df$comma_p1), "%"),
+    "P2=", paste0(sum(df$comma_p2), "%"),
+    "P3=", paste0(sum(df$comma_p3), "%"), "\n")
+
+cat("\nEXPLORATORY (NOT PREREGISTERED)\n")
+cat("  Gun control distribution:  ",
+    sum(df$gun_control <= 2), "pro-restriction,",
+    sum(df$gun_control == 3), "neutral,",
+    sum(df$gun_control >= 4), "anti-restriction\n")
+cat("  Gun control x interp:      p =", format.pval(gun_p, digits = 3), "\n")
+cat("  Age x interp:              p =", format.pval(age_p, digits = 3), "\n")
+cat("  Gender x interp:           p =",
+    format.pval(gender_fisher$p.value, digits = 3), "\n")
+
+cat("\n  Sample: ", sum(df$gender == "1"), "male,",
+    sum(df$gender == "2"), "female;",
+    "mean age =", round(mean(df$age_num, na.rm = TRUE), 1), "\n")
+cat("═══════════════════════════════════════════════════════════════════\n")
+```

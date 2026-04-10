@@ -1,0 +1,256 @@
+---
+title: "SA_E1A — PNAS Figures"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 6, fig.height = 4, dpi = 300)
+```
+
+```{r config}
+data_dir <- "/Users/dgkamper/Library/CloudStorage/GoogleDrive-dgkamper@gmail.com/My Drive/DGK Lab/Collaborations/BlankLang Lab/DGK Lab - BlankLangLab - Second Amendment Language Dependencies/Data/Study 1"
+
+output_dir <- "/Users/dgkamper/Library/CloudStorage/GoogleDrive-dgkamper@gmail.com/My Drive/DGK Lab/Collaborations/BlankLang Lab/DGK Lab - BlankLangLab - Second Amendment Language Dependencies/Analysis/Study 1"
+
+analytic_file       <- file.path(data_dir, "SA_E1A_analytic.csv")
+classification_file <- file.path(data_dir, "SA_E1A_rewrite_classifications.csv")
+fig_dir             <- file.path(output_dir, "figures_pnas")
+dir.create(fig_dir, showWarnings = FALSE)
+```
+
+```{r libraries, message=FALSE}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+```
+
+```{r load-data}
+df <- read.csv(analytic_file, stringsAsFactors = FALSE)
+rewrite_codes <- read.csv(classification_file, stringsAsFactors = FALSE)
+df <- merge(df, rewrite_codes[, c("prolific_pid", "rewrite_code")],
+            by = "prolific_pid", all.x = TRUE)
+
+df$interpretation <- as.integer(df$interpretation)
+df$confidence     <- as.integer(df$confidence)
+df$remove         <- as.integer(df$remove)
+df$comma_3v2      <- as.integer(df$comma_3v2)
+df$comma_3v1      <- as.integer(df$comma_3v1)
+df$comma_2v1      <- as.integer(df$comma_2v1)
+
+df$interp_label <- factor(
+  ifelse(df$interpretation == 2, "Categorical",
+  ifelse(df$interpretation == 1, "Conditional", "Neither")),
+  levels = c("Categorical", "Conditional", "Neither")
+)
+```
+
+```{r theme}
+# PNAS figures: no titles, no subtitles, clean axes, minimal ink.
+# All explanatory text goes in the LaTeX caption.
+
+col_cat  <- "#0072B2"
+col_cond <- "#D55E00"
+col_grey <- "#999999"
+
+theme_pnas <- theme_classic(base_size = 11, base_family = "sans") +
+  theme(
+    axis.title       = element_text(size = 11),
+    axis.text        = element_text(size = 10, color = "grey20"),
+    axis.line        = element_line(linewidth = 0.4),
+    axis.ticks       = element_line(linewidth = 0.3),
+    panel.background = element_blank(),
+    plot.background  = element_blank(),
+    plot.margin      = margin(10, 10, 10, 10),
+    legend.position  = "none"
+  )
+```
+
+
+# Fig 1 — Interpretation Distribution
+
+```{r fig1, fig.width=4.5, fig.height=3.5}
+interp_summary <- df %>%
+  count(interp_label) %>%
+  mutate(
+    prop = n / sum(n),
+    label = paste0(sprintf("%.1f%%", prop * 100))
+  )
+
+fig1 <- ggplot(interp_summary, aes(x = interp_label, y = prop, fill = interp_label)) +
+  geom_col(width = 0.6) +
+  geom_text(aes(label = label), vjust = -0.5, size = 3.5) +
+  scale_fill_manual(values = c(col_cat, col_cond, col_grey)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     limits = c(0, 1.0),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Interpretation", y = "Proportion") +
+  theme_pnas
+
+print(fig1)
+ggsave(file.path(fig_dir, "Fig1.pdf"), fig1, width = 4.5, height = 3.5)
+```
+
+
+# Fig 2 — Comma Sensitivity
+
+```{r fig2, fig.width=4.5, fig.height=3.5}
+comma_long <- df %>%
+  select(prolific_pid, comma_3v2, comma_3v1, comma_2v1) %>%
+  pivot_longer(cols = c(comma_3v2, comma_3v1, comma_2v1),
+               names_to = "comparison", values_to = "rating") %>%
+  mutate(
+    comparison = factor(comparison,
+      levels = c("comma_3v2", "comma_3v1", "comma_2v1"),
+      labels = c("3 vs. 2\n(1 removed)", 
+                  "3 vs. 1\n(2 removed)",
+                  "2 vs. 1\n(1 removed)"))
+  )
+
+comma_summary <- comma_long %>%
+  group_by(comparison) %>%
+  summarise(
+    m = mean(rating),
+    se = sd(rating) / sqrt(n()),
+    lo = m - 1.96 * se,
+    hi = m + 1.96 * se,
+    .groups = "drop"
+  )
+
+fig2 <- ggplot(comma_summary, aes(x = comparison, y = m)) +
+  geom_col(fill = col_cat, width = 0.55, alpha = 0.85) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), width = 0.15, linewidth = 0.4) +
+  geom_text(aes(label = sprintf("%.2f", m)), vjust = -2.2, size = 3.3) +
+  scale_y_continuous(limits = c(0, 2.7), breaks = 1:4,
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Comma comparison", y = "Perceived meaning change (1\u20134)") +
+  theme_pnas
+
+print(fig2)
+ggsave(file.path(fig_dir, "Fig2.pdf"), fig2, width = 4.5, height = 3.5)
+```
+
+
+# Fig 3 — Confidence by Group
+
+```{r fig3, fig.width=4, fig.height=3.5}
+df_conf <- df %>%
+  filter(interpretation %in% c(1, 2)) %>%
+  mutate(group = factor(ifelse(interpretation == 2, "Categorical", "Conditional"),
+                        levels = c("Categorical", "Conditional")))
+
+group_means <- df_conf %>%
+  group_by(group) %>%
+  summarise(m = mean(confidence), .groups = "drop")
+
+fig3 <- ggplot(df_conf, aes(x = group, y = confidence, fill = group)) +
+  geom_violin(alpha = 0.25, width = 0.7, color = NA) +
+  geom_jitter(aes(color = group), width = 0.1, size = 1.3, alpha = 0.4) +
+  geom_point(data = group_means, aes(y = m),
+             shape = 18, size = 4, color = "black") +
+  geom_hline(yintercept = 4, linetype = "dashed", color = "grey50", linewidth = 0.3) +
+  scale_fill_manual(values = c(col_cat, col_cond)) +
+  scale_color_manual(values = c(col_cat, col_cond)) +
+  scale_y_continuous(breaks = 1:7, limits = c(0.5, 7.5)) +
+  labs(x = "Interpretation group", y = "Confidence (1\u20137)") +
+  theme_pnas
+
+print(fig3)
+ggsave(file.path(fig_dir, "Fig3.pdf"), fig3, width = 4, height = 3.5)
+```
+
+
+# Fig 4 — Concordance Heatmap
+
+```{r fig4, fig.width=5, fig.height=3}
+cross_df <- df %>%
+  filter(interpretation %in% c(1, 2)) %>%
+  mutate(
+    fc = factor(ifelse(interpretation == 2, "Categorical", "Conditional"),
+                levels = c("Categorical", "Conditional")),
+    rw = factor(rewrite_code, levels = c("categorical", "ambiguous", "conditional"))
+  ) %>%
+  count(fc, rw) %>%
+  group_by(fc) %>%
+  mutate(pct = n / sum(n) * 100, label = paste0(n, "\n(", sprintf("%.0f%%", pct), ")")) %>%
+  ungroup()
+
+# Fill in missing combos
+all_combos <- expand.grid(
+  fc = factor(c("Categorical", "Conditional"), levels = c("Categorical", "Conditional")),
+  rw = factor(c("categorical", "ambiguous", "conditional"),
+              levels = c("categorical", "ambiguous", "conditional")),
+  stringsAsFactors = FALSE
+)
+cross_df <- merge(all_combos, cross_df, all = TRUE)
+cross_df$n[is.na(cross_df$n)] <- 0
+cross_df$pct[is.na(cross_df$pct)] <- 0
+cross_df$label[is.na(cross_df$label)] <- "0\n(0%)"
+
+fig4 <- ggplot(cross_df, aes(x = rw, y = fc, fill = n)) +
+  geom_tile(color = "white", linewidth = 1.5) +
+  geom_text(aes(label = label), size = 3.8, lineheight = 0.85) +
+  scale_fill_gradient(low = "grey96", high = col_cat, guide = "none") +
+  scale_x_discrete(labels = c("Categorical", "Ambiguous", "Conditional")) +
+  labs(x = "Rewrite classification", y = "Forced-choice interpretation") +
+  theme_pnas +
+  theme(axis.line = element_blank(), axis.ticks = element_blank())
+
+print(fig4)
+ggsave(file.path(fig_dir, "Fig4.pdf"), fig4, width = 5, height = 3)
+```
+
+
+# Fig 5 — Removal Impact by Group
+
+```{r fig5, fig.width=5, fig.height=4.5}
+df_rem <- df %>%
+  filter(interpretation %in% c(1, 2)) %>%
+  mutate(group = factor(ifelse(interpretation == 2, "Categorical", "Conditional"),
+                        levels = c("Categorical", "Conditional")))
+
+group_means <- df_rem %>%
+  group_by(group) %>%
+  summarise(m = mean(remove), .groups = "drop")
+
+fig5 <- ggplot(df_rem, aes(x = remove, fill = group)) +
+  geom_histogram(binwidth = 1, center = 0, alpha = 0.85,
+                 color = "white", linewidth = 0.3) +
+  geom_vline(xintercept = 4, linetype = "dashed", color = "grey40", linewidth = 0.3) +
+  geom_vline(data = group_means, aes(xintercept = m),
+             linewidth = 0.7, color = "black") +
+  facet_wrap(~ group, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c(col_cat, col_cond), guide = "none") +
+  scale_x_continuous(breaks = 1:7,
+    labels = c("1\nSame", "2", "3", "4\nMidpoint", "5", "6", "7\nCompletely\ndifferent")) +
+  labs(x = "Removal impact", y = "Count") +
+  theme_pnas +
+  theme(strip.text = element_text(face = "bold", size = 11))
+
+print(fig5)
+ggsave(file.path(fig_dir, "Fig5.pdf"), fig5, width = 5, height = 4.5)
+```
+
+
+# Fig 6 — Removal Impact Overall
+
+```{r fig6, fig.width=5, fig.height=3}
+fig6 <- ggplot(df, aes(x = remove)) +
+  geom_histogram(binwidth = 1, center = 0, fill = col_cat, alpha = 0.85,
+                 color = "white", linewidth = 0.3) +
+  geom_vline(xintercept = 4, linetype = "dashed", color = "grey40", linewidth = 0.3) +
+  geom_vline(xintercept = mean(df$remove), linewidth = 0.7, color = "black") +
+  scale_x_continuous(breaks = 1:7,
+    labels = c("1\nSame", "2", "3", "4\nMidpoint", "5", "6", "7\nCompletely\ndifferent")) +
+  labs(x = "Removal impact", y = "Count") +
+  theme_pnas
+
+print(fig6)
+ggsave(file.path(fig_dir, "Fig6.pdf"), fig6, width = 5, height = 3)
+```
+
+
+```{r done}
+cat("Figures saved to:", fig_dir, "\n")
+list.files(fig_dir, pattern = "\\.pdf$")
+```

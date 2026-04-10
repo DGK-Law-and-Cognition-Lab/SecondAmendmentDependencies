@@ -1,0 +1,515 @@
+---
+title: "SA_E1A — Stage 2: Exclusion Criteria"
+author: "David G. Kamper"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = TRUE, message = TRUE)
+```
+
+# Overview
+
+This document applies the preregistered exclusion criteria to the merged dataset
+produced in Stage 1. Exclusions are applied **sequentially** (each step operates
+on the participants remaining after the previous step), and we report the number
+excluded at each step, as specified in the preregistration.
+
+The preregistered exclusion criteria are:
+
+1. AI detection task (image captcha)
+2. Self-paced reading task (also for AI detection)
+3. Rewrite quality (Levenshtein edit distance)
+4. Self-reported non-seriousness
+5. Self-reported AI use
+6. Non-consent or device failure (handled by experiment logic)
+7. Total completion time (under 3 minutes)
+
+We also exclude one test run (PID = "TEST") that was used for platform verification
+before data collection began.
+
+The output is a filtered CSV: **`SA_E1A_analytic.csv`**.
+
+
+# 1. Setup
+
+```{r config}
+# ──────────────────────────────────────────────────────────────────────
+# PATHS
+# Input: the merged CSV from Stage 1
+# Output: the analytic sample after exclusions, saved in the same dir
+# ──────────────────────────────────────────────────────────────────────
+
+data_dir <- "/Users/dgkamper/Library/CloudStorage/GoogleDrive-dgkamper@gmail.com/My Drive/DGK Lab/Collaborations/BlankLang Lab/DGK Lab - BlankLangLab - Second Amendment Language Dependencies/Data/Study 1"
+
+input_file  <- file.path(data_dir, "SA_E1A_merged.csv")
+output_file <- file.path(data_dir, "SA_E1A_analytic.csv")
+```
+
+```{r libraries}
+library(stringdist)  # for stringdist() — Levenshtein edit distance
+```
+
+```{r load-data}
+# ──────────────────────────────────────────────────────────────────────
+# LOAD MERGED DATA
+# This is the output of Stage 1: one row per participant, with
+# standardized column names and sentence metadata already joined.
+# ──────────────────────────────────────────────────────────────────────
+
+df <- read.csv(input_file, stringsAsFactors = FALSE)
+cat("Loaded:", nrow(df), "participants.\n")
+```
+
+
+# 2. Exclusion Tracking
+
+We create a tracking data frame to record whether each participant is excluded
+and at which step, so we can report a transparent exclusion cascade.
+
+```{r exclusion-setup}
+# ──────────────────────────────────────────────────────────────────────
+# EXCLUSION TRACKER
+# Each participant starts as "included". As we apply each criterion,
+# we mark participants who fail. Because exclusions are sequential,
+# a participant is only counted under the FIRST criterion they fail.
+# (If someone fails both captcha and seriousness, they're counted
+# under captcha since that comes first.)
+# ──────────────────────────────────────────────────────────────────────
+
+df$excluded       <- FALSE     # will be set to TRUE if any criterion fails
+df$exclusion_step <- NA_character_  # which step excluded them (for reporting)
+n_start <- nrow(df)
+
+# Helper function: apply one exclusion criterion
+# - condition: logical vector (TRUE = should be excluded)
+# - label: human-readable label for reporting
+# Returns the number newly excluded at this step
+apply_exclusion <- function(condition, label) {
+  
+  # Only apply to participants not already excluded
+  newly_excluded <- condition & !df$excluded
+  n_new <- sum(newly_excluded)
+  
+  # Mark them
+  df$excluded[newly_excluded]       <<- TRUE
+  df$exclusion_step[newly_excluded] <<- label
+  
+  # Report
+  n_remaining <- sum(!df$excluded)
+  cat(sprintf("  %-45s  excluded: %d   remaining: %d\n", 
+              label, n_new, n_remaining))
+  
+  return(n_new)
+}
+
+cat("Starting N:", n_start, "\n\n")
+```
+
+
+# 3. Apply Exclusion Criteria
+
+```{r step-0}
+# ──────────────────────────────────────────────────────────────────────
+# STEP 0: Test / platform-verification runs
+#
+# Before the study launched, the experimenter completed test runs to
+# verify the Pavlovia + Prolific integration. These are identified by
+# placeholder Prolific PIDs (e.g., "TEST"). They are not real
+# participants and must be removed before applying substantive
+# exclusion criteria.
+#
+# This step is not part of the preregistered exclusion sequence (it
+# precedes it), since test runs are not participant data.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Step 0: Test runs\n")
+apply_exclusion(
+  condition = df$prolific_pid %in% c("TEST", "test", ""),
+  label = "0. Test/verification run"
+)
+```
+
+```{r step-1}
+# ──────────────────────────────────────────────────────────────────────
+# STEP 1: AI detection — image captcha
+#
+# The experiment displays an image instructing participants to press
+# the letter "Q". Hidden white-on-white HTML text says "press Z" to
+# trap automated browsers (which read HTML, not images). Participants
+# who press Z (or any key other than Q) fail. The variable
+# captcha_pass is TRUE for Q, FALSE for Z.
+#
+# Participants who fail are ejected by the experiment itself (they see
+# a "Thank you" screen and cannot continue). So in practice, anyone
+# in our dataset who completed the experiment should have
+# captcha_pass = TRUE. We check anyway for safety.
+#
+# Note: The TEST run (excluded above) has captcha_pass = NA because
+# it predates the captcha being added to the experiment.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Step 1: AI detection — captcha\n")
+apply_exclusion(
+  condition = is.na(df$captcha_pass) | df$captcha_pass != "true",
+  label = "1. Failed captcha"
+)
+```
+
+```{r step-2}
+# ──────────────────────────────────────────────────────────────────────
+# STEP 2: AI detection — self-paced reading
+#
+# Participants complete two moving-window self-paced reading (SPR)
+# trials as a secondary AI detection measure. Automated systems would
+# produce implausibly fast or perfectly uniform reading times.
+#
+# The preregistration states that the SPR task is "also for AI
+# detection" and that initial data collection was used "to calibrate
+# exclusion criteria for self-paced reading time thresholds."
+#
+# Criterion: We exclude participants whose minimum word-level reading
+# time on EITHER SPR trial falls below 100 milliseconds. Human
+# readers cannot extract word meaning in under ~100ms (cf. Rayner,
+# 1998; typical lower bounds in SPR studies are 100–150ms). Times
+# below this threshold indicate automated spacebar pressing.
+#
+# Note: SPR data is missing (NA) for the TEST run (already excluded
+# in Step 0). For remaining participants, we require non-missing SPR
+# data.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Step 2: AI detection — self-paced reading\n")
+
+# Convert to numeric (they are stored as character from CSV)
+df$spr1_min_rt <- as.numeric(df$spr1_min_rt)
+df$spr2_min_rt <- as.numeric(df$spr2_min_rt)
+
+# Criterion: min RT below 100ms on either trial, or missing SPR data
+# for a participant who wasn't already excluded
+spr_fail <- (!df$excluded) & (
+  is.na(df$spr1_min_rt) | is.na(df$spr2_min_rt) |
+  df$spr1_min_rt < 100 | df$spr2_min_rt < 100
+)
+
+apply_exclusion(
+  condition = spr_fail,
+  label = "2. Implausible SPR times (<100ms)"
+)
+
+# Descriptive: show SPR distributions for remaining participants
+remaining <- df[!df$excluded, ]
+cat(sprintf("\n  SPR1 min RT — median: %.0f ms, range: [%.0f, %.0f]\n",
+            median(remaining$spr1_min_rt, na.rm = TRUE),
+            min(remaining$spr1_min_rt, na.rm = TRUE),
+            max(remaining$spr1_min_rt, na.rm = TRUE)))
+cat(sprintf("  SPR2 min RT — median: %.0f ms, range: [%.0f, %.0f]\n",
+            median(remaining$spr2_min_rt, na.rm = TRUE),
+            min(remaining$spr2_min_rt, na.rm = TRUE),
+            max(remaining$spr2_min_rt, na.rm = TRUE)))
+```
+
+```{r step-3}
+# ──────────────────────────────────────────────────────────────────────
+# STEP 3: Rewrite quality — Levenshtein edit distance
+#
+# For the Rewrite question, participants were asked to rewrite the
+# sentence "in your own words, making it as simple as possible."
+# Near-verbatim copies indicate the participant did not engage with
+# the task meaningfully (they may have copy-pasted despite the paste
+# prevention, or typed it out verbatim).
+#
+# Preregistered criterion: Compute the Levenshtein edit distance
+# between the original sentence and the participant's rewrite AFTER
+# removing all non-alphabetic characters and converting to lowercase.
+# Exclude participants with edit distance < 5.
+#
+# The stringdist package computes Levenshtein distance efficiently.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Step 3: Rewrite quality — edit distance\n")
+
+# Clean both strings: remove non-alpha characters, lowercase
+clean_text <- function(x) {
+  tolower(gsub("[^a-zA-Z]", "", x))
+}
+
+df$rewrite_clean  <- clean_text(df$rewrite)
+df$sentence_clean <- clean_text(df$full_sentence)
+
+# Compute Levenshtein distance
+df$edit_distance <- stringdist(df$rewrite_clean, df$sentence_clean, method = "lv")
+
+# Apply criterion
+apply_exclusion(
+  condition = !is.na(df$edit_distance) & df$edit_distance < 5,
+  label = "3. Near-verbatim rewrite (edit dist < 5)"
+)
+
+# Descriptive: show the excluded rewrites for transparency
+excluded_rewrites <- df[df$exclusion_step == "3. Near-verbatim rewrite (edit dist < 5)" & 
+                          !is.na(df$exclusion_step), ]
+if (nrow(excluded_rewrites) > 0) {
+  cat("\n  Excluded rewrites:\n")
+  for (i in seq_len(nrow(excluded_rewrites))) {
+    cat(sprintf("    PID=%s, SID=%d, edit_dist=%d\n", 
+                excluded_rewrites$prolific_pid[i],
+                excluded_rewrites$sentence_id[i],
+                excluded_rewrites$edit_distance[i]))
+    cat(sprintf("      Original: %s\n", substr(excluded_rewrites$full_sentence[i], 1, 80)))
+    cat(sprintf("      Rewrite:  %s\n\n", substr(excluded_rewrites$rewrite[i], 1, 80)))
+  }
+}
+
+# Show the distribution of edit distances for remaining participants
+remaining <- df[!df$excluded, ]
+cat(sprintf("  Edit distance — median: %.0f, range: [%.0f, %.0f]\n",
+            median(remaining$edit_distance, na.rm = TRUE),
+            min(remaining$edit_distance, na.rm = TRUE),
+            max(remaining$edit_distance, na.rm = TRUE)))
+```
+
+```{r step-4}
+# ──────────────────────────────────────────────────────────────────────
+# STEP 4: Self-reported non-seriousness
+#
+# In the debrief, participants were asked: "Did you complete this
+# experiment seriously throughout (without responding randomly)?"
+# Response options:
+#   1 = "No, I didn't"
+#   4 = "Yes, I did"
+#
+# (The values 1 and 4 — not 1 and 2 — are deliberate; this is how
+# the experiment.js encodes them, likely to avoid scale midpoint
+# confusion.)
+#
+# Preregistered criterion: Exclude participants who respond "No, I
+# didn't" (seriousness = 1).
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Step 4: Self-reported non-seriousness\n")
+apply_exclusion(
+  condition = df$seriousness == "1",
+  label = "4. Self-reported non-serious"
+)
+```
+
+```{r step-5}
+# ──────────────────────────────────────────────────────────────────────
+# STEP 5: Self-reported AI use
+#
+# Participants were asked: "Did you use any AI tool (such as ChatGPT,
+# Claude, or similar) to help answer any of the questions in this
+# study? Your answer will NOT affect your payment in any way."
+# Response options:
+#   1 = "Yes"
+#   2 = "No"
+#
+# Preregistered criterion: Exclude participants who respond "Yes"
+# (ai_usage = 1).
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Step 5: Self-reported AI use\n")
+apply_exclusion(
+  condition = df$ai_usage == "1",
+  label = "5. Self-reported AI use"
+)
+```
+
+```{r step-6}
+# ──────────────────────────────────────────────────────────────────────
+# STEP 6: Non-consent or device failure
+#
+# The experiment logic prevents participants from continuing if they:
+#   - Do not consent (consent != 1)
+#   - Report using a phone or tablet (device_self_report = 2)
+#
+# Because the experiment stops them before they can complete, these
+# participants should not appear in the Pavlovia data at all. We
+# check anyway as a safeguard.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Step 6: Non-consent or device failure\n")
+apply_exclusion(
+  condition = df$consent != "1" | df$device_self_report == "2",
+  label = "6. Non-consent or wrong device"
+)
+```
+
+```{r step-7}
+# ──────────────────────────────────────────────────────────────────────
+# STEP 7: Total completion time
+#
+# Preregistered criterion: Exclude participants who complete the
+# entire experiment in under 3 minutes (180,000 ms). The experiment
+# includes multiple pages with enforced minimum display times (7s
+# each for most question pages), two SPR trials, and several open-
+# ended response fields, so a genuine completion in under 3 minutes
+# is implausible.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Step 7: Completion time\n")
+
+df$total_duration_ms <- as.numeric(df$total_duration_ms)
+
+apply_exclusion(
+  condition = !is.na(df$total_duration_ms) & df$total_duration_ms < 180000,
+  label = "7. Completion time < 3 minutes"
+)
+
+# Descriptive: show completion time distribution for remaining
+remaining <- df[!df$excluded, ]
+dur_min <- remaining$total_duration_ms / 60000
+cat(sprintf("\n  Completion time — median: %.1f min, range: [%.1f, %.1f]\n",
+            median(dur_min, na.rm = TRUE),
+            min(dur_min, na.rm = TRUE),
+            max(dur_min, na.rm = TRUE)))
+```
+
+
+# 4. Exclusion Summary
+
+```{r exclusion-summary}
+# ──────────────────────────────────────────────────────────────────────
+# EXCLUSION CASCADE
+# Summarize how many were excluded at each step.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══════════════════════════════════════════════════\n")
+cat("  EXCLUSION CASCADE\n")
+cat("═══════════════════════════════════════════════════\n\n")
+
+cat(sprintf("  Starting N:                        %d\n", n_start))
+
+# Count by step
+step_counts <- table(df$exclusion_step[df$excluded])
+for (step in sort(names(step_counts))) {
+  cat(sprintf("  %-42s -%d\n", step, step_counts[step]))
+}
+
+cat(sprintf("  %s\n", paste(rep("─", 50), collapse = "")))
+cat(sprintf("  Total excluded:                    %d\n", sum(df$excluded)))
+cat(sprintf("  Final analytic N:                  %d\n", sum(!df$excluded)))
+cat(sprintf("  Exclusion rate:                    %.1f%%\n", 
+            mean(df$excluded) * 100))
+cat("═══════════════════════════════════════════════════\n")
+```
+
+
+# 5. Analytic Sample Descriptives
+
+```{r analytic-sample}
+# ──────────────────────────────────────────────────────────────────────
+# Quick descriptives of the analytic sample, for comparison with the
+# preregistered expectations and the pilot.
+# ──────────────────────────────────────────────────────────────────────
+
+analytic <- df[!df$excluded, ]
+
+cat("ANALYTIC SAMPLE DESCRIPTIVES\n\n")
+
+# Interpretation distribution
+cat("Interpretation distribution:\n")
+interp_table <- table(analytic$interpretation)
+for (val in sort(names(interp_table))) {
+  label <- c("1" = "Conditional", "2" = "Categorical", "3" = "Neither")[val]
+  cat(sprintf("  %s: %d (%.1f%%)\n", label, interp_table[val],
+              interp_table[val] / nrow(analytic) * 100))
+}
+
+# Sentence distribution
+cat("\nSentence distribution:\n")
+sent_table <- table(analytic$sentence_id)
+cat(sprintf("  Sentences represented: %d of 20\n", length(sent_table)))
+cat(sprintf("  Min per sentence: %d\n", min(sent_table)))
+cat(sprintf("  Max per sentence: %d\n", max(sent_table)))
+cat(sprintf("  Mean per sentence: %.1f\n", mean(sent_table)))
+
+# Flag any sentences with very few observations
+low_n <- sent_table[sent_table < 3]
+if (length(low_n) > 0) {
+  cat("\n  WARNING: Sentences with fewer than 3 observations:\n")
+  for (i in seq_along(low_n)) {
+    cat(sprintf("    Sentence %s: %d observations\n", names(low_n)[i], low_n[i]))
+  }
+}
+
+# Rewrite-first counterbalancing
+cat("\nRewrite-first counterbalancing:\n")
+rf_table <- table(analytic$rewrite_first)
+for (val in names(rf_table)) {
+  cat(sprintf("  rewrite_first = %s: %d (%.1f%%)\n", val, rf_table[val],
+              rf_table[val] / nrow(analytic) * 100))
+}
+
+# Demographics overview
+cat("\nDemographics:\n")
+cat(sprintf("  Age — median: %s, range: [%s, %s]\n",
+            median(as.numeric(analytic$age), na.rm = TRUE),
+            min(as.numeric(analytic$age), na.rm = TRUE),
+            max(as.numeric(analytic$age), na.rm = TRUE)))
+
+gender_table <- table(analytic$gender)
+gender_labels <- c("1" = "Male", "2" = "Female", "3" = "Nonbinary", 
+                    "4" = "Other", "5" = "Prefer not to say")
+for (val in sort(names(gender_table))) {
+  cat(sprintf("  Gender %s (%s): %d\n", val, 
+              ifelse(val %in% names(gender_labels), gender_labels[val], "Unknown"),
+              gender_table[val]))
+}
+```
+
+
+# 6. Save Analytic Dataset
+
+```{r save}
+# ──────────────────────────────────────────────────────────────────────
+# SAVE
+# We save the full dataset (including excluded participants) with the
+# exclusion flags, AND a filtered version with only the analytic 
+# sample. Both are useful:
+#   - Full dataset (with flags): for verifying exclusion decisions
+#   - Analytic sample: for Stages 3 and 4
+#
+# We also drop the cleaning columns (rewrite_clean, sentence_clean)
+# since they were only needed for edit distance computation.
+# ──────────────────────────────────────────────────────────────────────
+
+# Full dataset with exclusion flags
+full_output <- file.path(data_dir, "SA_E1A_merged_with_exclusions.csv")
+write.csv(df[, !names(df) %in% c("rewrite_clean", "sentence_clean")], 
+          full_output, row.names = FALSE, fileEncoding = "UTF-8")
+cat("Saved full dataset with exclusion flags to:\n ", full_output, "\n\n")
+
+# Analytic sample only (excluded participants removed)
+analytic_out <- analytic[, !names(analytic) %in% c("rewrite_clean", "sentence_clean",
+                                                     "excluded", "exclusion_step")]
+write.csv(analytic_out, output_file, row.names = FALSE, fileEncoding = "UTF-8")
+cat("Saved analytic sample to:\n ", output_file, "\n")
+cat("Dimensions:", nrow(analytic_out), "rows x", ncol(analytic_out), "columns.\n")
+```
+
+
+# Summary
+
+```{r final-summary}
+cat("═══════════════════════════════════════════════════\n")
+cat("  SA_E1A Stage 2: Exclusions — Complete\n")
+cat("═══════════════════════════════════════════════════\n\n")
+cat("  Starting N:          ", n_start, "\n")
+cat("  Excluded:            ", sum(df$excluded), "\n")
+cat("  Analytic N:          ", sum(!df$excluded), "\n")
+cat("  Exclusion rate:      ", sprintf("%.1f%%", mean(df$excluded) * 100), "\n\n")
+cat("  Outputs:\n")
+cat("    Full (with flags): ", full_output, "\n")
+cat("    Analytic sample:   ", output_file, "\n\n")
+cat("  Next steps:\n")
+cat("    Stage 3: Rewrite classification (Python/Colab)\n")
+cat("    Stage 4: Hypothesis testing (R)\n")
+cat("═══════════════════════════════════════════════════\n")
+```

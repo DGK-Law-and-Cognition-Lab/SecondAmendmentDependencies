@@ -1,0 +1,655 @@
+---
+title: "Power Analysis — Study 1 (SA_E1A)"
+author: "David G. Kamper"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    code_folding: show
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width  = 8,
+  fig.height = 5,
+  fig.align  = "center",
+  cache   = TRUE
+)
+set.seed(42)
+```
+
+# Why simulation?
+
+Closed-form power formulas exist for t-tests and simple ANOVAs, but not
+for the models we actually plan to fit.  Our design crosses a
+between-subjects sentence factor (20 items, one per participant) with
+within-subject comma comparisons and produces binary, ordinal, and
+continuous outcomes.  The only honest way to estimate power for this
+combination is to generate data that mirrors the real design, fit the
+real models, and tally how often each test reaches significance across
+many repetitions.
+
+Everything below uses 1 000 Monte Carlo draws per sample-size point
+unless noted otherwise.  Pilot parameters come from the pilot study
+(N = 121, 20 sentences, one sentence per participant, Qualtrics).
+
+```{r packages}
+library(lme4)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(scales)
+library(mclust)   # Gaussian mixture models for H6
+```
+
+# Pilot parameter summary
+
+A compact reference table so every simulation can point back to a
+single source.  All values come from the pilot analysis (PilotAnalysis_Final).
+
+```{r pilot-params}
+# ── Binary interpretation ─────────────────────────────────
+pilot_pcat         <- 0.843        # P(categorical)
+pilot_logodds      <- 1.68         # intercept on logit scale
+pilot_sigma_sent   <- 0.0          # sentence RE was singular in pilot
+
+# ── Confidence ────────────────────────────────────────────
+pilot_conf_cat     <- 5.27         # mean, categorical group
+pilot_conf_con     <- 5.01         # mean, conditional group
+pilot_conf_sd      <- 1.27         # residual SD
+
+# ── IsTrue distribution (3 categories) ────────────────────
+pilot_istrue       <- c(0.405, 0.107, 0.488)
+names(pilot_istrue) <- c("not_crucial", "somewhat", "essential")
+
+# ── Removal impact (7-pt, centered at 4 → 0) ─────────────
+pilot_remove_mu    <- -0.215       # overall centered mean
+pilot_remove_sd    <- 1.69
+
+# ── Concordance between forced-choice and coded rewrite ───
+pilot_concord_cat  <- 0.694        # among categorical interpreters
+pilot_concord_con  <- 0.298        # among conditional interpreters
+
+# ── Design constants ──────────────────────────────────────
+n_sentences <- 20
+n_sims      <- 1000
+Ns          <- seq(100, 500, by = 50)
+```
+
+# H1 — Most people choose the categorical interpretation
+
+The pilot found 84.3 % of participants selected the categorical
+reading (log-odds = 1.68, SE = 0.25).  We fit an intercept-only
+logistic GLMM with a random intercept for sentence and test whether
+the intercept differs from zero (i.e., whether the split differs from
+50 / 50).
+
+The pilot estimated zero sentence-level variance, but that was almost
+certainly due to the small per-sentence n (5–7).  To be conservative
+we simulate with sigma_sentence = 0.30 on the logit scale, which
+lets sentence-level proportions range roughly from 75 % to 90 %.
+
+```{r h1-sim, cache=TRUE}
+# Conservative sentence-level SD (pilot was 0, likely underestimated)
+sigma_sent_h1 <- 0.30
+
+sim_h1 <- function(N) {
+  sid <- rep(1:n_sentences, length.out = N)
+  u   <- rnorm(n_sentences, 0, sigma_sent_h1)
+  p   <- plogis(pilot_logodds + u[sid])
+  y   <- rbinom(N, 1, p)
+  df  <- data.frame(y = y, sentence = factor(sid))
+
+  tryCatch({
+    m <- glmer(y ~ 1 + (1 | sentence), data = df, family = binomial,
+               control = glmerControl(optimizer = "bobyqa"))
+    summary(m)$coefficients["(Intercept)", "Pr(>|z|)"] < 0.05
+  }, error = function(e) FALSE)
+}
+
+h1 <- data.frame(N = Ns, power = NA_real_)
+for (i in seq_along(Ns)) {
+  h1$power[i] <- mean(replicate(n_sims, sim_h1(Ns[i])))
+  cat(sprintf("  H1  N = %d  power = %.3f\n", Ns[i], h1$power[i]))
+}
+```
+
+```{r h1-plot}
+ggplot(h1, aes(N, power)) +
+  geom_line(linewidth = 1.2, colour = "#0072B2") +
+  geom_point(size = 3, colour = "#0072B2") +
+  geom_hline(yintercept = .80, linetype = "dashed", colour = "red") +
+  scale_y_continuous(labels = percent_format(), limits = 0:1) +
+  labs(title = "H1 — Categorical interpretation bias",
+       subtitle = "Intercept-only logistic GLMM; pilot P(cat) = 84 %",
+       x = "Total N", y = "Power") +
+  theme_minimal(base_size = 13)
+```
+
+
+# H2 — Removing more commas produces larger perceived change
+
+Each participant rates three comma-removal comparisons on a 1–4
+ordinal scale (1 = exactly the same meaning, 4 = very different
+meanings).  The three comparisons are: 3-comma vs 2-comma (one comma
+removed), 3-comma vs 1-comma (two commas removed), and 2-comma vs
+1-comma (one comma removed).  If commas matter, the two-comma removal
+(3v1) should get higher ratings than either single-comma removal (3v2
+or 2v1).
+
+We fit a single linear mixed model on all three ratings simultaneously:
+
+`rating ~ question + (1 + question | sentence) + (1 | participant)`
+
+where `question` is a 3-level factor (3v2, 3v1, 2v1) and we test
+pairwise contrasts (3v1 > 3v2 and 3v1 > 2v1).
+
+Because there is no pilot data for this manipulation, we sweep across
+a range of plausible effect sizes.  We parameterise the simulation by
+the mean rating for each comparison type.  If commas have no effect,
+all three means are equal; if they do, the 3v1 mean sits above the
+other two.  We express the gap in scale units (the scale runs 1–4,
+so a gap of 0.3 is roughly a third of a category step).
+
+```{r h2-sim, cache=TRUE}
+# Each participant contributes 3 rows (one per comparison).
+# We assume a common residual SD of 0.90 on the 1-4 scale,
+# sentence-level SD of 0.15 on the intercept, and
+# participant-level SD of 0.40.
+
+sigma_resid_h2   <- 0.90
+sigma_sent_h2    <- 0.15
+sigma_part_h2    <- 0.40
+
+# The "gap" is how much higher the 3v1 mean is compared to the
+# single-removal means (3v2 and 2v1).  We hold 3v2 and 2v1 at the
+# same baseline, and raise 3v1 by the gap.
+gaps <- c(0.15, 0.20, 0.25, 0.30, 0.40, 0.50)
+
+sim_h2 <- function(N, gap) {
+  sid <- rep(1:n_sentences, length.out = N)
+  pid <- 1:N
+
+  # Random effects
+  u_sent <- rnorm(n_sentences, 0, sigma_sent_h2)
+  u_part <- rnorm(N, 0, sigma_part_h2)
+
+  # Fixed-effect means for each comparison type.
+  # Baseline (3v2 and 2v1) at 2.0, and 3v1 at 2.0 + gap.
+  mu <- c("3v2" = 2.0, "3v1" = 2.0 + gap, "2v1" = 2.0)
+
+  # Build long-format data: 3 rows per participant
+  df <- expand.grid(participant = pid, question = names(mu)) %>%
+    mutate(
+      sentence  = sid[participant],
+      fixed_mu  = mu[question],
+      rating    = fixed_mu +
+                  u_sent[sentence] +
+                  u_part[participant] +
+                  rnorm(n(), 0, sigma_resid_h2),
+      sentence  = factor(sentence),
+      participant = factor(participant),
+      # treatment-code with 3v2 as reference
+      question = factor(question, levels = c("3v2", "3v1", "2v1"))
+    )
+
+  tryCatch({
+    # Fit the model.  We drop the random slope for question by sentence
+    # because with one participant per sentence there's not much data to
+    # estimate it; instead we keep the two random intercepts.
+    m <- lmer(rating ~ question + (1 | sentence) + (1 | participant),
+              data = df)
+    coefs <- summary(m)$coefficients
+    # The contrast we care about: 3v1 vs 3v2 (the question3v1 coefficient).
+    # One-sided: we expect it to be positive.
+    t_val <- coefs["question3v1", "t value"]
+    t_val > 1.96
+  }, error = function(e) FALSE)
+}
+
+h2_grid <- expand.grid(N = Ns, gap = gaps)
+h2_grid$power <- NA_real_
+for (i in 1:nrow(h2_grid)) {
+  h2_grid$power[i] <- mean(replicate(n_sims,
+                        sim_h2(h2_grid$N[i], h2_grid$gap[i])))
+}
+cat("H2 done\n")
+```
+
+```{r h2-plot}
+ggplot(h2_grid, aes(N, power, colour = factor(gap), group = factor(gap))) +
+  geom_line(linewidth = 1) + geom_point(size = 2) +
+  geom_hline(yintercept = .80, linetype = "dashed", colour = "red") +
+  scale_y_continuous(labels = percent_format(), limits = 0:1) +
+  scale_colour_brewer(palette = "Set1", name = "Gap\n(scale units)") +
+  labs(title = "H2 — Graded comma sensitivity",
+       subtitle = "LMM with question as fixed effect; 3v1 coefficient > 0",
+       x = "Total N", y = "Power") +
+  theme_minimal(base_size = 13)
+```
+
+
+# H3 — People who call the clause "essential" still see little change when it is removed
+
+This is the paradox at the heart of the paper.  Nearly half of pilot
+participants (48.8 %) said the prefatory clause is "absolutely
+essential," yet when asked how much the sentence's implications
+change if we remove that clause, ratings cluster at the *low* end of
+the scale (mean = −0.2 when centered at the midpoint, where negative
+values mean "similar implications").
+
+The scale runs 1 (same implications) to 7 (completely different), so
+the midpoint is 4 ("neither similar nor different").  The paradox
+holds if, among the "essential" subgroup, the mean rating falls
+*below* the midpoint — that is, even people who believe the clause is
+essential think its removal produces similar (not different)
+implications.
+
+We test this with a one-sided t-test: H₀: μ ≥ 4 vs. H₁: μ < 4
+(using uncentered scores), or equivalently H₀: μ_centered ≥ 0 vs.
+H₁: μ_centered < 0.
+
+```{r h3-sim, cache=TRUE}
+# Among "essential" raters, pilot removal-impact mean was about 3.8
+# (= 4 + (−0.2)) on the raw scale, SD ≈ 1.7.
+# Only ~49 % of participants fall in this subgroup, so effective n is
+# roughly half of N.
+
+prop_essential <- pilot_istrue["essential"]  # 0.488
+mu_essential   <- -0.20                       # centered
+sd_essential   <- 1.70
+
+sim_h3 <- function(N) {
+  n_ess <- round(N * prop_essential)
+  if (n_ess < 10) return(FALSE)
+  scores <- rnorm(n_ess, mu_essential, sd_essential)
+  # one-sided: is the mean significantly BELOW zero?
+  t.test(scores, mu = 0, alternative = "less")$p.value < 0.05
+}
+
+h3 <- data.frame(N = Ns, power = NA_real_)
+for (i in seq_along(Ns)) {
+  h3$power[i] <- mean(replicate(n_sims, sim_h3(Ns[i])))
+  cat(sprintf("  H3  N = %d  power = %.3f\n", Ns[i], h3$power[i]))
+}
+```
+
+```{r h3-plot}
+ggplot(h3, aes(N, power)) +
+  geom_line(linewidth = 1.2, colour = "#D55E00") +
+  geom_point(size = 3, colour = "#D55E00") +
+  geom_hline(yintercept = .80, linetype = "dashed", colour = "red") +
+  scale_y_continuous(labels = percent_format(), limits = 0:1) +
+  labs(title = "H3 — Prefatory clause paradox",
+       subtitle = "One-sided t: removal impact < midpoint among 'essential' raters",
+       x = "Total N", y = "Power") +
+  theme_minimal(base_size = 13)
+```
+
+
+# H4 — Both groups are confident, and equally so
+
+Categorical interpreters in the pilot reported confidence of 5.27
+(SD = 1.27); conditional interpreters reported 5.01 (SD = 1.27).
+Both are well above the midpoint of 4 on the 1–7 scale.
+
+We want to show two things:
+
+(a) each group's mean is above the midpoint, and
+(b) the groups do not differ from each other (equivalence test,
+    TOST with Δ = 0.5 scale points).
+
+The conditional group is the bottleneck: only about 16 % of
+participants choose the conditional reading, so the effective n for
+that subgroup is small.  Part (a) should be easy; part (b) is harder.
+
+```{r h4-sim, cache=TRUE}
+delta_h4 <- 0.5   # equivalence bound for part (b)
+
+sim_h4 <- function(N) {
+  n_cat <- round(N * pilot_pcat)
+  n_con <- N - n_cat
+  if (n_con < 10) return(FALSE)
+
+  cat_scores <- rnorm(n_cat, pilot_conf_cat, pilot_conf_sd)
+  con_scores <- rnorm(n_con, pilot_conf_con, pilot_conf_sd)
+
+  # (a) both above midpoint?
+  a1 <- t.test(cat_scores, mu = 4, alternative = "greater")$p.value < 0.05
+  a2 <- t.test(con_scores, mu = 4, alternative = "greater")$p.value < 0.05
+
+  # (b) TOST: difference within ± delta?
+  b1 <- t.test(cat_scores, con_scores, mu = -delta_h4,
+               alternative = "greater")$p.value < 0.05
+  b2 <- t.test(cat_scores, con_scores, mu =  delta_h4,
+               alternative = "less")$p.value    < 0.05
+
+  a1 & a2 & b1 & b2
+}
+
+h4 <- data.frame(N = Ns, power = NA_real_)
+for (i in seq_along(Ns)) {
+  h4$power[i] <- mean(replicate(n_sims, sim_h4(Ns[i])))
+  cat(sprintf("  H4  N = %d  power = %.3f\n", Ns[i], h4$power[i]))
+}
+```
+
+```{r h4-plot}
+ggplot(h4, aes(N, power)) +
+  geom_line(linewidth = 1.2, colour = "#009E73") +
+  geom_point(size = 3, colour = "#009E73") +
+  geom_hline(yintercept = .80, linetype = "dashed", colour = "red") +
+  scale_y_continuous(labels = percent_format(), limits = 0:1) +
+  labs(title = "H4 — High confidence, no group difference",
+       subtitle = "Both groups > midpoint AND TOST equivalence (Δ = ±0.5)",
+       x = "Total N", y = "Power") +
+  theme_minimal(base_size = 13)
+```
+
+
+# H5 — What people write doesn't always match what they pick
+
+In the pilot, many participants who chose the categorical
+interpretation on the forced-choice question produced rewrites that
+contained conditional language ("if," "when," "in cases where").
+The concordance matrix showed 69.4 % agreement for categorical
+interpreters but only 29.8 % for conditional interpreters.
+
+As an update, we have three sub-hypotheses:
+
+**H5a**: Among categorical interpreters, a non-trivial proportion
+produce rewrites coded as conditional.  Pilot: 28.4 % discordance.
+We report this as a point estimate with a 95 % bootstrap CI.
+
+**H5b**: Among conditional interpreters, concordance is below 100 % —
+many produce rewrites that don't clearly reflect conditional
+language.  Pilot: only 29.8 % concordance (i.e., 70.2 % discordance
+in the *other* direction).  Again, point estimate + bootstrap CI.
+
+**H5c**: The concordance rate differs between the two groups.
+Two-sample proportion test, one-sided: categorical concordance >
+conditional concordance.  This is the only piece with a formal
+significance test; the other two are descriptive with CIs.
+
+For power we focus on H5c, which is the testable comparison.
+
+```{r h5-sim, cache=TRUE}
+# We use conservative estimates, somewhat deflated from the pilot.
+p_concord_cat_h5 <- 0.60   # pilot: 0.694
+p_concord_con_h5 <- 0.35   # pilot: 0.298
+
+sim_h5c <- function(N) {
+  n_cat <- round(N * pilot_pcat)
+  n_con <- N - n_cat
+  if (n_con < 10) return(FALSE)
+
+  x_cat <- rbinom(1, n_cat, p_concord_cat_h5)
+  x_con <- rbinom(1, n_con, p_concord_con_h5)
+
+  prop.test(c(x_cat, x_con), c(n_cat, n_con),
+            alternative = "greater")$p.value < 0.05
+}
+
+h5 <- data.frame(N = Ns, power = NA_real_)
+for (i in seq_along(Ns)) {
+  h5$power[i] <- mean(replicate(n_sims, sim_h5c(Ns[i])))
+  cat(sprintf("  H5c N = %d  power = %.3f\n", Ns[i], h5$power[i]))
+}
+```
+
+```{r h5-plot}
+ggplot(h5, aes(N, power)) +
+  geom_line(linewidth = 1.2, colour = "#CC79A7") +
+  geom_point(size = 3, colour = "#CC79A7") +
+  geom_hline(yintercept = .80, linetype = "dashed", colour = "red") +
+  scale_y_continuous(labels = percent_format(), limits = 0:1) +
+  labs(title = "H5c — Concordance differs by interpretation group",
+       subtitle = "Two-sample proportion test; conservative rates 60 % vs. 35 %",
+       x = "Total N", y = "Power") +
+  theme_minimal(base_size = 13)
+```
+
+
+# H6 — Perceived importance is bimodal, not uniform
+
+The IsTrue question has three response options.  In the pilot,
+responses piled up at the extremes: 40.5 % "not crucial," only
+10.7 % "somewhat important," and 48.8 % "absolutely essential."
+That looks bimodal — but a chi-squared test against a uniform null
+would reject for *any* non-uniform shape, including unimodal skew.
+
+We fit Gaussian mixture models with 1, 2, and 3
+components and compare BIC.  If the 2-component model has the best
+(lowest) BIC, that is evidence of bimodality.  We simulate data from
+a 2-component mixture that mimics the pilot distribution and ask how
+often the 2-component BIC beats the 1-component BIC.
+
+We map the three ordinal categories onto a continuous latent variable
+(helpful for the mixture approach) using midpoints: "not crucial" = 1,
+"somewhat" = 2, "essential" = 3, then add noise.  The resulting
+distribution has two peaks (at ~1 and ~3) with a valley in between.
+
+```{r h6-sim, cache=TRUE}
+# To simulate a bimodal latent variable:
+# Component 1: mu = 1.0, sd = 0.5, weight = 0.45
+# Component 2: mu = 3.0, sd = 0.5, weight = 0.45
+# The remaining 10% sits in between (absorbed by overlap of the two).
+
+sim_h6 <- function(N) {
+  # Simulate from the 2-component mixture
+  z     <- rbinom(N, 1, 0.55)   # 55% from component 2
+  x     <- ifelse(z == 0,
+                  rnorm(N, 1.0, 0.50),
+                  rnorm(N, 3.0, 0.50))
+
+  # Fit 1-, 2-, and 3-component models.
+  # mclust's Mclust does this and returns BIC.
+  tryCatch({
+    fit1 <- Mclust(x, G = 1, verbose = FALSE)
+    fit2 <- Mclust(x, G = 2, verbose = FALSE)
+
+    # BIC in mclust is *higher* = better (they use the positive convention).
+    # So bimodality wins if fit2$bic > fit1$bic.
+    fit2$bic > fit1$bic
+  }, error = function(e) FALSE)
+}
+
+h6 <- data.frame(N = Ns, power = NA_real_)
+for (i in seq_along(Ns)) {
+  h6$power[i] <- mean(replicate(n_sims, sim_h6(Ns[i])))
+  cat(sprintf("  H6  N = %d  power = %.3f\n", Ns[i], h6$power[i]))
+}
+```
+
+```{r h6-plot}
+ggplot(h6, aes(N, power)) +
+  geom_line(linewidth = 1.2, colour = "#E69F00") +
+  geom_point(size = 3, colour = "#E69F00") +
+  geom_hline(yintercept = .80, linetype = "dashed", colour = "red") +
+  scale_y_continuous(labels = percent_format(), limits = 0:1) +
+  labs(title = "H6 — Bimodal perceived importance",
+       subtitle = "2-component Gaussian mixture BIC beats 1-component",
+       x = "Total N", y = "Power") +
+  theme_minimal(base_size = 13)
+```
+
+
+# H7 — Removal impact is small regardless of interpretation type
+
+The pilot overall removal-impact mean was −0.215 (centered), meaning
+most people saw the implications as roughly similar even after losing
+the prefatory clause.  We test this *separately* within
+each interpretation group rather than collapsing across groups.  The
+logic: if categorical interpreters rate the right as unconditional, of
+course removing the clause changes little; the interesting result is
+whether conditional interpreters *also* rate the change as small.
+
+We run one-sided tests (H₁: mean < midpoint) within each group.
+Power for the categorical subgroup should be very high (large n); the
+conditional subgroup is the bottleneck (~16 % of N).
+
+We use slightly different pilot means for each group (pilot:
+categorical mean = −0.29, conditional mean = +0.21, both centered).
+
+```{r h7-sim, cache=TRUE}
+# Pilot subgroup means (centered)
+mu_rem_cat <- -0.29
+mu_rem_con <-  0.21   # conditional group was slightly ABOVE midpoint
+sd_rem     <-  1.69
+
+sim_h7 <- function(N) {
+  n_cat <- round(N * pilot_pcat)
+  n_con <- N - n_cat
+  if (n_con < 10) return(FALSE)
+
+  cat_scores <- rnorm(n_cat, mu_rem_cat, sd_rem)
+  con_scores <- rnorm(n_con, mu_rem_con, sd_rem)
+
+  # Categorical group: expect below midpoint
+  p_cat <- t.test(cat_scores, mu = 0, alternative = "less")$p.value < 0.05
+  # Conditional group: pilot mean was slightly ABOVE zero,
+  # so testing "less" may not be significant.  We test two-sided
+  # instead: does this group differ from the midpoint at all?
+  p_con <- t.test(con_scores, mu = 0)$p.value < 0.05
+
+  # "Power" = both tests yield the expected pattern.
+  # For categorical: significant below midpoint.
+  # For conditional: NOT significant (we want to show they're near zero too).
+  # But powering for a null result in one group and a significant result
+  # in the other is tricky.  Let's just report power for each arm separately.
+  c(cat_sig = p_cat, con_nonsig = !p_con)
+}
+
+h7_cat <- h7_con <- data.frame(N = Ns, power = NA_real_)
+for (i in seq_along(Ns)) {
+  res <- replicate(n_sims, sim_h7(Ns[i]))
+  h7_cat$power[i] <- mean(res["cat_sig", ])
+  h7_con$power[i] <- mean(res["con_nonsig", ])
+  cat(sprintf("  H7  N = %d  cat_below = %.3f  con_near_zero = %.3f\n",
+              Ns[i], h7_cat$power[i], h7_con$power[i]))
+}
+```
+
+```{r h7-plot}
+h7_both <- bind_rows(
+  h7_cat %>% mutate(Group = "Categorical: mean < midpoint"),
+  h7_con %>% mutate(Group = "Conditional: not different from midpoint")
+)
+ggplot(h7_both, aes(N, power, colour = Group)) +
+  geom_line(linewidth = 1) + geom_point(size = 2) +
+  geom_hline(yintercept = .80, linetype = "dashed", colour = "red") +
+  scale_y_continuous(labels = percent_format(), limits = 0:1) +
+  scale_colour_manual(values = c("#56B4E9", "#661100")) +
+  labs(title = "H7 — Removal impact by interpretation type",
+       subtitle = "Separate tests within categorical and conditional subgroups",
+       x = "Total N", y = "Power") +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+
+# Combined view
+
+```{r combined, fig.width = 10, fig.height = 7}
+# Pick a single "best guess" effect size for H2 (gap = 0.25)
+h2_pick <- h2_grid %>% filter(gap == 0.25) %>% select(N, power)
+
+all <- bind_rows(
+  h1     %>% mutate(H = "H1  Categorical bias"),
+  h2_pick %>% mutate(H = "H2  Comma sensitivity (gap 0.25)"),
+  h3     %>% mutate(H = "H3  Paradox (essential raters)"),
+  h4     %>% mutate(H = "H4  Confidence equivalence"),
+  h5     %>% mutate(H = "H5c Concordance comparison"),
+  h6     %>% mutate(H = "H6  Bimodal importance"),
+  h7_cat %>% mutate(H = "H7  Removal (categorical)")
+)
+
+ggplot(all, aes(N, power, colour = H)) +
+  geom_line(linewidth = .9) +
+  geom_point(size = 1.5) +
+  geom_hline(yintercept = .80, linetype = "dashed", colour = "red",
+             linewidth = .8) +
+  geom_vline(xintercept = 300, linetype = "dotted", colour = "grey40") +
+  annotate("text", x = 308, y = .03, label = "N = 300",
+           hjust = 0, colour = "grey40", fontface = "italic") +
+  scale_y_continuous(labels = percent_format(), limits = 0:1) +
+  scale_colour_brewer(palette = "Paired") +
+  labs(title = "Power across all pre-registered hypotheses",
+       subtitle = "Dashed red = 80 %; dotted grey = proposed N = 300",
+       x = "Total N", y = "Power") +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "right", legend.text = element_text(size = 9))
+```
+
+
+# Minimum N per hypothesis
+
+```{r min-N}
+min80 <- function(df) {
+  hit <- df %>% filter(power >= .80)
+  if (nrow(hit) == 0) return(paste0(">", max(df$N)))
+  min(hit$N)
+}
+
+tab <- data.frame(
+  Hypothesis = c(
+    "H1  Categorical bias",
+    "H2  Comma sensitivity (gap = 0.25)",
+    "H3  Paradox (essential raters below midpoint)",
+    "H4  Confidence: both above midpoint + TOST equivalence",
+    "H5c Concordance higher in categorical vs. conditional",
+    "H6  Bimodal importance (mixture BIC)",
+    "H7  Removal below midpoint (categorical subgroup)"
+  ),
+  Min_N = c(
+    min80(h1),
+    min80(h2_pick),
+    min80(h3),
+    min80(h4),
+    min80(h5),
+    min80(h6),
+    min80(h7_cat)
+  )
+)
+knitr::kable(tab, col.names = c("Hypothesis", "Min N for 80 % power"),
+             caption = "Sample-size requirements")
+```
+
+
+# Recommendation
+
+Most hypotheses are comfortably powered well below N = 300.
+
+The likely bottleneck is **H4** (confidence equivalence), because the
+conditional interpreter subgroup is so small (~16 % of the sample)
+that the TOST equivalence test on the group difference needs a very
+large total N.  We therefore classify H4 as **secondary confirmatory**:
+we will report confidence intervals on the group difference regardless,
+but we acknowledge that the formal TOST is underpowered.
+
+For all other hypotheses, **N = 300 usable participants** provides
+≥ 80 % power.  Accounting for ~10–15 % exclusions (AI detection,
+edit-distance flagging, seriousness self-report), we should collect
+approximately **340–350 participants** via Prolific.
+
+With 20 sentences and balanced assignment, that yields ~15 observations
+per sentence — sufficient for stable random-intercept estimation in
+GLMMs.
+
+The total target across the two sentence sets (current sentences +
+technical sentences) is 600 participants (300 per set).
+
+
+# Session info
+
+```{r session}
+sessionInfo()
+```

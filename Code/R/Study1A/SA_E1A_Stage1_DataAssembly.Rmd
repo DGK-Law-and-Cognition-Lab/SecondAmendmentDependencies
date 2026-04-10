@@ -1,0 +1,652 @@
+---
+title: "SA_E1A — Stage 1: Data Assembly"
+author: "David G. Kamper"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = TRUE, message = TRUE)
+```
+
+# Overview
+
+This document merges the individual per-participant CSV files produced by Pavlovia
+into a single rectangular dataset suitable for analysis. Each participant completed the
+SA_E1A experiment and produced one CSV file. Because the experiment assigned each
+participant exactly one sentence (between-subjects), the sentence-specific columns are
+named with a prefix like `S3_rewrite`, `S10_interpretation`, etc. This script detects
+each participant's sentence ID and renames those columns to generic names (e.g.,
+`rewrite`, `interpretation`) so all participants share a common schema.
+
+The output is a single CSV file: **`SA_E1A_merged.csv`**.
+
+No exclusions are applied here — that happens in Stage 2. This script only assembles
+and verifies the raw data.
+
+
+# 1. Setup and Configuration
+
+```{r config}
+# ──────────────────────────────────────────────────────────────────────
+# DATA DIRECTORY
+# This is the path to the folder containing all individual participant
+# CSV files downloaded from Pavlovia. Each file is named like:
+#   data_SA_E1A_{prolific_pid}_SESSION_{datetime}.csv
+# ──────────────────────────────────────────────────────────────────────
+
+data_dir <- "/Users/dgkamper/Library/CloudStorage/GoogleDrive-dgkamper@gmail.com/My Drive/DGK Lab/Collaborations/BlankLang Lab/DGK Lab - BlankLangLab - Second Amendment Language Dependencies/Data/Study 1/data"
+
+# ──────────────────────────────────────────────────────────────────────
+# OUTPUT PATH
+# Where the merged dataset will be saved. By default, it goes in the
+# same parent directory as the data folder.
+# ──────────────────────────────────────────────────────────────────────
+
+output_dir <- dirname(data_dir)
+output_file <- file.path(output_dir, "SA_E1A_merged.csv")
+```
+
+```{r libraries}
+# ──────────────────────────────────────────────────────────────────────
+# LIBRARIES
+# Only base R and stringr are needed for this stage. We avoid loading
+# heavy packages that aren't required yet.
+# ──────────────────────────────────────────────────────────────────────
+
+library(stringr)  # for str_replace, str_detect
+```
+
+
+# 2. Sentence Metadata
+
+The experiment uses 20 sentences, each with Second Amendment–style syntax. The
+sentence metadata below is transcribed directly from `experiment.js` (the `S` array,
+lines 199–219). We need this because the classifier in Stage 3 requires the original
+sentence text alongside each participant's rewrite.
+
+The `full()` function in experiment.js constructs the sentence as:
+`subject + ", " + being + ", " + right + ", " + must + "."`
+
+```{r sentence-metadata}
+# ──────────────────────────────────────────────────────────────────────
+# SENTENCE DATA
+# Each row corresponds to one of the 20 experimental sentences.
+# "full_sentence" is the exact string participants saw on screen, 
+# constructed the same way experiment.js builds it with the full() 
+# helper function: subject + ", " + being + ", " + right + ", " + must + "."
+#
+# "no_prefix_sentence" is the version with the prefatory clause removed,
+# constructed the same way experiment.js builds it with noPrefix():
+# Capitalize first letter of right + ", " + must + "."
+# Participants saw this version on the Removal Impact question.
+# ──────────────────────────────────────────────────────────────────────
+
+sentences <- data.frame(
+  sentence_id = 1:20,
+  
+  subject = c(
+    "A well-kept archive",
+    "A respected cultural tradition",
+    "A properly organized marketplace",
+    "A well-supplied food reserve",
+    "A consistently monitored weather station",
+    "A structurally sound dam",
+    "A tended field",
+    "A replenished pharmacy",
+    "A functional kitchen",
+    "A community garden plot",
+    "A dry basement",
+    "A marked parking area",
+    "A serviceable harbor",
+    "A functioning legal system",
+    "A free press institution",
+    "A representative town council",
+    "A reliable postal network",
+    "A working public bus system",
+    "A consumer co-op",
+    "A trained group of medical responders"
+  ),
+  
+  being = c(
+    "being necessary for historical preservation",
+    "being necessary for fostering unity within a community",
+    "being necessary for economic exchange",
+    "being necessary for food security",
+    "being necessary for the prediction of dangerous storms",
+    "being necessary for protection from rising waters",
+    "being necessary for seasonal harvest",
+    "being necessary for the treatment of illness",
+    "being necessary for meal preparation",
+    "being necessary for growing vegetables",
+    "being necessary for storing household goods",
+    "being necessary for the storage of vehicles",
+    "being necessary for access to water",
+    "being necessary for the administration of justice",
+    "being necessary for an informed public",
+    "being necessary for local governance",
+    "being necessary for civic communication",
+    "being necessary for urban mobility",
+    "being necessary for fair access to goods",
+    "being necessary for public health emergencies"
+  ),
+  
+  right = c(
+    "the right of people to access and manage records",
+    "the right of people to pass down and share knowledge",
+    "the right of people to sell and trade goods",
+    "the right of people to store and preserve essential provisions",
+    "the right of people to prepare for and respond to natural threats",
+    "the right of people to defend their land from flood",
+    "the right of people to cultivate and work the land",
+    "the right of people to prepare and dispense medicine",
+    "the right of people to assemble and equip personal spaces for cooking",
+    "the right of people to plant and cultivate their own produce",
+    "the right of people to dig and waterproof spaces below the ground",
+    "the right of people to park near their homes",
+    "the right of people to set anchors along the shore",
+    "the right of people to assemble and deliberate as jurors",
+    "the right of people to publish and distribute information",
+    "the right of people to assemble and deliberate on civic matters",
+    "the right of people to send and receive correspondence",
+    "the right of people to plan and operate shared transportation",
+    "the right of people to pool purchasing power and govern enterprises jointly",
+    "the right of people to study and practice emergency care"
+  ),
+  
+  must = c(
+    "must not be infringed",
+    "must not be infringed",
+    "must not be revoked",
+    "must not be denied",
+    "must not be violated",
+    "must not be revoked",
+    "must not be infringed",
+    "must not be violated",
+    "must not be infringed",
+    "must not be infringed",
+    "must not be revoked",
+    "must not be infringed",
+    "must not be revoked",
+    "must not be hindered",
+    "must not be impeded",
+    "must not be violated",
+    "must not be disrupted",
+    "must not be revoked",
+    "must not be violated",
+    "shall not be infringed"   # Note: sentence 20 uses "shall" not "must"
+  ),
+  
+  stringsAsFactors = FALSE
+)
+
+# ──────────────────────────────────────────────────────────────────────
+# Construct the full sentence exactly as experiment.js does:
+#   full(s) = s.subject + ", " + s.being + ", " + s.right + ", " + s.must + "."
+# ──────────────────────────────────────────────────────────────────────
+
+sentences$full_sentence <- paste0(
+  sentences$subject, ", ",
+  sentences$being, ", ",
+  sentences$right, ", ",
+  sentences$must, "."
+)
+
+# ──────────────────────────────────────────────────────────────────────
+# Construct the no-prefix version as experiment.js does:
+#   noPrefix(s) = capitalize(s.right) + ", " + s.must + "."
+# This is shown on the Removal Impact question.
+# ──────────────────────────────────────────────────────────────────────
+
+sentences$no_prefix_sentence <- paste0(
+  toupper(substr(sentences$right, 1, 1)),
+  substr(sentences$right, 2, nchar(sentences$right)),
+  ", ", sentences$must, "."
+)
+
+# Quick sanity check: print sentence 10 as a verification
+cat("Sentence 10 (verification):\n")
+cat(sentences$full_sentence[10], "\n")
+```
+
+
+# 3. Read and Merge Individual CSVs
+
+```{r read-files}
+# ──────────────────────────────────────────────────────────────────────
+# LIST ALL CSV FILES
+# Each participant produces exactly one CSV file. We list them all and
+# will process each one individually.
+# ──────────────────────────────────────────────────────────────────────
+
+csv_files <- list.files(data_dir, pattern = "\\.csv$", full.names = TRUE)
+cat("Found", length(csv_files), "CSV files.\n")
+```
+
+```{r define-merge-function}
+# ──────────────────────────────────────────────────────────────────────
+# FUNCTION: read_and_normalize_one_file
+#
+# This function reads a single participant CSV and normalizes the
+# sentence-specific column names to generic names.
+#
+# The challenge: Pavlovia records sentence-specific columns with 
+# prefixes like S3_, S10_, S17_, etc. Each file only has columns for
+# the sentence that participant was assigned. We need to:
+#   1. Detect which sentence ID this participant received
+#   2. Strip the "S{id}_" prefix from those columns
+#   3. Return a data frame with consistent column names
+#
+# CONDITIONAL COLUMNS:
+# - "istrue": Only recorded when interpretation = 1 (conditional) or
+#   3 (neither). For categorical interpreters (interpretation = 2),
+#   the experiment skips this question entirely, so the column does
+#   not exist in their CSV. We set it to NA for those participants.
+#
+# - "attn1_retry" and "attn1_retry_pass": Only recorded when a
+#   participant failed the first attention check. Most participants
+#   pass on the first try and don't have these columns. We set them
+#   to NA when absent.
+# ──────────────────────────────────────────────────────────────────────
+
+read_and_normalize_one_file <- function(filepath) {
+  
+  # Read the CSV. Each file has exactly one data row (one participant).
+  df <- read.csv(filepath, stringsAsFactors = FALSE, check.names = FALSE)
+  
+  # Basic validation: should have exactly 1 row
+  if (nrow(df) != 1) {
+    warning(paste("File has", nrow(df), "rows (expected 1):", basename(filepath)))
+    return(NULL)
+  }
+  
+  # Get this participant's sentence ID from the "sentence_id" column
+  sid <- as.character(df$sentence_id)
+  
+  # Validate that the sentence ID is between 1 and 20
+  if (!sid %in% as.character(1:20)) {
+    warning(paste("Invalid sentence_id:", sid, "in", basename(filepath)))
+    return(NULL)
+  }
+  
+  # ── Identify sentence-specific columns ──
+  # These are columns that match the pattern "S{id}_something"
+  # For example, if sentence_id = 10: S10_rewrite, S10_interpretation, etc.
+  prefix <- paste0("S", sid, "_")
+  sid_cols <- names(df)[str_detect(names(df), paste0("^", prefix))]
+  
+  # ── Rename sentence-specific columns to generic names ──
+  # "S10_rewrite" becomes "rewrite", "S10_interpretation" becomes "interpretation", etc.
+  new_names <- str_replace(sid_cols, paste0("^", prefix), "")
+  names(df)[match(sid_cols, names(df))] <- new_names
+  
+  # ── Handle the conditional "istrue" column ──
+  # If interpretation was 2 (categorical), this column doesn't exist.
+  # We add it as NA so all participants have the same columns.
+  if (!"istrue" %in% names(df)) {
+    df$istrue <- NA
+  }
+  
+  # ── Handle the conditional attention check retry columns ──
+  # Most participants pass attn1 on the first try and don't have these.
+  if (!"attn1_retry" %in% names(df)) {
+    df$attn1_retry <- NA
+  }
+  if (!"attn1_retry_pass" %in% names(df)) {
+    df$attn1_retry_pass <- NA
+  }
+  
+  # ── Add source filename for traceability ──
+  df$source_file <- basename(filepath)
+  
+  return(df)
+}
+```
+
+```{r merge-all-files}
+# ──────────────────────────────────────────────────────────────────────
+# PROCESS ALL FILES
+# Read each file, normalize column names, and combine into one data frame.
+# We track any files that fail to process and report them.
+# ──────────────────────────────────────────────────────────────────────
+
+all_dfs <- list()
+failed_files <- character(0)
+
+for (i in seq_along(csv_files)) {
+  result <- tryCatch(
+    read_and_normalize_one_file(csv_files[i]),
+    error = function(e) {
+      warning(paste("Error reading file", basename(csv_files[i]), ":", e$message))
+      return(NULL)
+    }
+  )
+  
+  if (!is.null(result)) {
+    all_dfs[[length(all_dfs) + 1]] <- result
+  } else {
+    failed_files <- c(failed_files, basename(csv_files[i]))
+  }
+}
+
+cat("Successfully processed:", length(all_dfs), "files.\n")
+
+if (length(failed_files) > 0) {
+  cat("FAILED files:\n")
+  for (f in failed_files) cat("  -", f, "\n")
+} else {
+  cat("No failures.\n")
+}
+
+# ──────────────────────────────────────────────────────────────────────
+# COMBINE INTO ONE DATA FRAME
+# All data frames should now have identical column names. We use
+# rbind to stack them. If column mismatches remain, this will error
+# informatively.
+# ──────────────────────────────────────────────────────────────────────
+
+# First, verify all data frames have the same column set
+col_sets <- lapply(all_dfs, names)
+reference_cols <- sort(col_sets[[1]])
+
+mismatched <- which(sapply(col_sets, function(x) !identical(sort(x), reference_cols)))
+
+if (length(mismatched) > 0) {
+  cat("\nWARNING: Column mismatch in", length(mismatched), "file(s).\n")
+  for (idx in mismatched) {
+    extra <- setdiff(names(all_dfs[[idx]]), names(all_dfs[[1]]))
+    missing <- setdiff(names(all_dfs[[1]]), names(all_dfs[[idx]]))
+    cat("  File", idx, "- extra:", paste(extra, collapse = ", "), 
+        "| missing:", paste(missing, collapse = ", "), "\n")
+  }
+  
+  # ── Harmonize columns across all data frames ──
+  # Use the union of all column names so no data is lost. Missing
+  # columns in any given data frame get filled with NA.
+  all_col_names <- unique(unlist(col_sets))
+  
+  all_dfs <- lapply(all_dfs, function(df) {
+    missing_cols <- setdiff(all_col_names, names(df))
+    for (col in missing_cols) {
+      df[[col]] <- NA
+    }
+    # Reorder columns to match
+    df[, all_col_names]
+  })
+}
+
+# Stack all rows
+merged <- do.call(rbind, all_dfs)
+rownames(merged) <- NULL
+
+cat("\nMerged dataset:", nrow(merged), "participants x", ncol(merged), "columns.\n")
+```
+
+
+# 4. Join Sentence Metadata
+
+```{r join-metadata}
+# ──────────────────────────────────────────────────────────────────────
+# JOIN SENTENCE TEXT
+# We attach the original sentence text, its components, and the
+# no-prefix version to each participant's row. This is needed for:
+#   - Stage 3 (classifier needs the original sentence + rewrite)
+#   - Any analysis that references the sentence content
+#
+# We join on sentence_id after ensuring both are numeric.
+# ──────────────────────────────────────────────────────────────────────
+
+merged$sentence_id <- as.integer(merged$sentence_id)
+
+merged <- merge(merged, sentences, by = "sentence_id", all.x = TRUE)
+
+# Verify: no participants should have missing sentence metadata
+missing_sentence <- sum(is.na(merged$full_sentence))
+if (missing_sentence > 0) {
+  warning(paste(missing_sentence, "participants have no matching sentence metadata!"))
+} else {
+  cat("All participants successfully matched to sentence metadata.\n")
+}
+```
+
+
+# 5. Flag Test Runs
+
+```{r flag-test-runs}
+# ──────────────────────────────────────────────────────────────────────
+# FLAG TEST / PILOT RUNS
+# During platform testing, the experimenter may have completed the
+# experiment using a placeholder PID (e.g., "TEST"). These files get
+# saved to Pavlovia alongside real participant data. We flag them here
+# so they can be identified, but we do NOT remove them — exclusions
+# happen in Stage 2.
+#
+# Known indicator: prolific_pid = "TEST" and missing captcha/SPR
+# columns (the screening tasks were added after the initial test run).
+# ──────────────────────────────────────────────────────────────────────
+
+test_runs <- merged$prolific_pid %in% c("TEST", "test", "")
+cat("Flagged as test runs:", sum(test_runs), "\n")
+if (sum(test_runs) > 0) {
+  cat("  PIDs:", paste(merged$prolific_pid[test_runs], collapse = ", "), "\n")
+  cat("  Source files:", paste(merged$source_file[test_runs], collapse = ", "), "\n")
+  cat("  (These will be excluded in Stage 2.)\n")
+}
+```
+
+
+# 6. Verification Checks
+
+Before saving, we run a series of verification checks.
+
+```{r verify-dimensions}
+# ──────────────────────────────────────────────────────────────────────
+# CHECK 1: Row count matches file count
+# Each file should produce exactly one row.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Files read:", length(all_dfs), "\n")
+cat("Rows in merged:", nrow(merged), "\n")
+
+if (nrow(merged) != length(all_dfs)) {
+  warning("Row count does not match file count!")
+}
+```
+
+```{r verify-duplicates}
+# ──────────────────────────────────────────────────────────────────────
+# CHECK 2: No duplicate Prolific PIDs
+# Each participant should appear exactly once. Duplicates would mean
+# either the same person completed the experiment twice, or we have
+# duplicate CSV files.
+# ──────────────────────────────────────────────────────────────────────
+
+pid_counts <- table(merged$prolific_pid)
+duplicates <- pid_counts[pid_counts > 1]
+
+if (length(duplicates) > 0) {
+  cat("WARNING: Duplicate Prolific PIDs found:\n")
+  print(duplicates)
+} else {
+  cat("No duplicate Prolific PIDs. Each participant appears once.\n")
+}
+```
+
+```{r verify-sentence-distribution}
+# ──────────────────────────────────────────────────────────────────────
+# CHECK 3: Sentence distribution
+# The experiment assigns sentences via Math.floor(Math.random()*20),
+# so assignment is random (not counterbalanced). We expect uneven
+# counts but all 20 sentences should be represented.
+# ──────────────────────────────────────────────────────────────────────
+
+sentence_dist <- table(merged$sentence_id)
+cat("Sentence distribution:\n")
+print(sentence_dist)
+cat("\nSentences represented:", length(sentence_dist), "of 20\n")
+cat("Min per sentence:", min(sentence_dist), "\n")
+cat("Max per sentence:", max(sentence_dist), "\n")
+cat("Mean per sentence:", round(mean(sentence_dist), 1), "\n")
+```
+
+```{r verify-key-columns}
+# ──────────────────────────────────────────────────────────────────────
+# CHECK 4: Key columns are non-missing
+# The columns that are critical for analysis should have values for
+# every participant (except istrue, which is legitimately NA for
+# categorical interpreters).
+# ──────────────────────────────────────────────────────────────────────
+
+key_cols <- c("prolific_pid", "sentence_id", "interpretation", "confidence",
+              "rewrite", "addcommas", "remove", "and",
+              "comma_3v2", "comma_3v1", "comma_2v1", "distinguish",
+              "captcha_pass", "attn1_pass", "seriousness", "ai_usage",
+              "total_duration_ms", "rewrite_first")
+
+cat("Missing values in key columns:\n")
+for (col in key_cols) {
+  n_missing <- sum(is.na(merged[[col]]) | merged[[col]] == "")
+  if (n_missing > 0) {
+    cat("  ", col, ":", n_missing, "missing\n")
+  }
+}
+cat("(No output above = no missing values in key columns.)\n")
+```
+
+```{r verify-interpretation}
+# ──────────────────────────────────────────────────────────────────────
+# CHECK 5: Interpretation distribution
+# Quick look at the primary DV to make sure values are as expected.
+# Values should be 1 (conditional), 2 (categorical), or 3 (neither).
+# ──────────────────────────────────────────────────────────────────────
+
+cat("Interpretation distribution:\n")
+interp_table <- table(merged$interpretation, useNA = "ifany")
+print(interp_table)
+
+cat("\nAs percentages:\n")
+print(round(prop.table(interp_table) * 100, 1))
+```
+
+```{r verify-istrue-logic}
+# ──────────────────────────────────────────────────────────────────────
+# CHECK 6: Verify istrue is present/absent as expected
+# The istrue question only appears when interpretation = 1 or 3.
+# So istrue should be NA when interpretation = 2, and non-NA otherwise.
+# ──────────────────────────────────────────────────────────────────────
+
+# Participants who chose categorical (2) should have NA for istrue
+cat_no_istrue <- sum(merged$interpretation == "2" & is.na(merged$istrue))
+cat_has_istrue <- sum(merged$interpretation == "2" & !is.na(merged$istrue))
+
+# Participants who chose conditional (1) or neither (3) should have istrue
+other_has_istrue <- sum(merged$interpretation %in% c("1", "3") & !is.na(merged$istrue))
+other_no_istrue <- sum(merged$interpretation %in% c("1", "3") & is.na(merged$istrue))
+
+cat("Categorical (interp=2): istrue is NA =", cat_no_istrue, ", has value =", cat_has_istrue, "\n")
+cat("Conditional/Neither (interp=1,3): istrue has value =", other_has_istrue, ", is NA =", other_no_istrue, "\n")
+
+if (cat_has_istrue > 0 | other_no_istrue > 0) {
+  warning("istrue column logic does not match expectations!")
+} else {
+  cat("istrue column logic verified: matches experiment flow.\n")
+}
+```
+
+
+# 7. Column Inventory
+
+```{r column-inventory}
+# ──────────────────────────────────────────────────────────────────────
+# Print all column names in the final merged dataset, grouped by
+# category, for reference.
+# ──────────────────────────────────────────────────────────────────────
+
+cat("FINAL COLUMN INVENTORY (", ncol(merged), " columns):\n\n")
+
+id_cols <- c("prolific_pid", "prolific_study_id", "prolific_session_id",
+             "sentence_id", "source_file")
+cat("Identifiers:", paste(id_cols[id_cols %in% names(merged)], collapse = ", "), "\n\n")
+
+experiment_cols <- c("rewrite_first", "start_time", "end_time", "total_duration_ms",
+                     "device_type", "user_agent", "fullscreen_entered", 
+                     "device_self_report", "screen_width", "screen_height",
+                     "page_timestamps")
+cat("Experiment metadata:", paste(experiment_cols[experiment_cols %in% names(merged)], collapse = ", "), "\n\n")
+
+screening_cols <- c("captcha_response", "captcha_pass", 
+                    "spr1_rts", "spr1_mean_rt", "spr1_min_rt", "spr1_understood",
+                    "spr2_rts", "spr2_mean_rt", "spr2_min_rt", "spr2_understood",
+                    "consent", "date_of_consent",
+                    "attn1", "attn1_pass", "attn1_retry", "attn1_retry_pass")
+cat("Screening / AI detection:", paste(screening_cols[screening_cols %in% names(merged)], collapse = ", "), "\n\n")
+
+dv_cols <- c("rewrite", "addcommas", "interpretation", "confidence", "istrue",
+             "remove", "and", "comma_3v2", "comma_3v1", "comma_2v1", "distinguish")
+cat("Dependent variables:", paste(dv_cols[dv_cols %in% names(merged)], collapse = ", "), "\n\n")
+
+attn2_cols <- c("police1", "police2", "police3")
+cat("Attention check 2:", paste(attn2_cols[attn2_cols %in% names(merged)], collapse = ", "), "\n\n")
+
+demo_cols <- c("gender", "age", "race", "country", "native_language",
+               "english_exposure_age", "other_languages", "english_frequency",
+               "potential_conflicts", "potential_conflicts_explain", "gun_control")
+cat("Demographics:", paste(demo_cols[demo_cols %in% names(merged)], collapse = ", "), "\n\n")
+
+debrief_cols <- c("ai_usage", "seriousness", "quiet_environment", "distracted",
+                  "feedback_procedure", "feedback_other")
+cat("Debrief:", paste(debrief_cols[debrief_cols %in% names(merged)], collapse = ", "), "\n\n")
+
+sentence_meta_cols <- c("subject", "being", "right", "must", 
+                        "full_sentence", "no_prefix_sentence")
+cat("Sentence metadata (joined):", paste(sentence_meta_cols[sentence_meta_cols %in% names(merged)], collapse = ", "), "\n\n")
+```
+
+
+# 8. Save
+
+```{r save}
+# ──────────────────────────────────────────────────────────────────────
+# SAVE THE MERGED DATASET
+# Write as CSV with UTF-8 encoding. Row names are excluded.
+# This file is the input for all subsequent stages:
+#   - Stage 2 (exclusions)
+#   - Stage 3 (rewrite classification, in Python/Colab)
+#   - Stage 4 (hypothesis testing)
+# ──────────────────────────────────────────────────────────────────────
+
+write.csv(merged, output_file, row.names = FALSE, fileEncoding = "UTF-8")
+cat("Saved merged dataset to:\n", output_file, "\n")
+cat("Dimensions:", nrow(merged), "rows x", ncol(merged), "columns.\n")
+```
+
+
+# Summary
+
+```{r summary}
+# ──────────────────────────────────────────────────────────────────────
+# FINAL SUMMARY
+# ──────────────────────────────────────────────────────────────────────
+
+cat("═══════════════════════════════════════════════════\n")
+cat("  SA_E1A Stage 1: Data Assembly — Complete\n")
+cat("═══════════════════════════════════════════════════\n\n")
+cat("  Total participants:        ", nrow(merged), "\n")
+cat("  Sentences represented:     ", length(unique(merged$sentence_id)), "of 20\n")
+cat("  Failed files:              ", length(failed_files), "\n")
+cat("  Duplicate PIDs:            ", sum(pid_counts > 1), "\n")
+cat("  Interpretation breakdown:  \n")
+cat("    Categorical (2):         ", sum(merged$interpretation == "2"), 
+    " (", round(mean(merged$interpretation == "2") * 100, 1), "%)\n", sep = "")
+cat("    Conditional (1):         ", sum(merged$interpretation == "1"), 
+    " (", round(mean(merged$interpretation == "1") * 100, 1), "%)\n", sep = "")
+cat("    Neither (3):             ", sum(merged$interpretation == "3"), 
+    " (", round(mean(merged$interpretation == "3") * 100, 1), "%)\n", sep = "")
+cat("\n  Output: ", output_file, "\n")
+cat("  Next step: Stage 2 (Exclusions)\n")
+cat("═══════════════════════════════════════════════════\n")
+```
