@@ -210,6 +210,7 @@ This research was approved by the UCLA Institutional Review Board. All participa
 ## Authors
 
 **David G. Kamper** -- University of California, Los Angeles; University of Chicago Law School
+
 Corresponding author: [davidgkamper@ucla.edu](mailto:davidgkamper@ucla.edu)
 
 **Anna Walburger** -- University of California, Los Angeles
